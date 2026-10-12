@@ -1,0 +1,11 @@
+# 安装：  crontab -e  然后粘贴下面两行（按需改路径）
+#
+# 本机时区已经是 Asia/Shanghai，cron 的 17:00 就是北京时间；
+# 如果部署到 UTC 机器上，请像下面这样显式指定 CRON_TZ（Debian/cronie 均支持）。
+CRON_TZ=Asia/Shanghai
+
+# 交易日 17:00 —— 全市场放量扫描。非交易日脚本会自己跳过（快照日期 != 今天）。
+0 17 * * 1-5 /home/jumpsrv/daily-freq-stock-data/scripts/daily_scan.sh
+
+# 可选：每周六凌晨备份一次行情库（SQLite 单文件，直接 cp 即可）
+30 2 * * 6 cp /home/jumpsrv/daily-freq-stock-data/data/market.sqlite /home/jumpsrv/backup/market_$(date +\%Y\%m\%d).sqlite

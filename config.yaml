@@ -1,0 +1,77 @@
+# ============================================================================
+# A股日频放量扫描 —— 配置文件
+# 所有路径默认相对于本文件所在目录；可用 --config 指定其它配置文件。
+# ============================================================================
+
+store:
+  # 行情落库位置（SQLite，单文件，方便备份/迁移）
+  path: data/market.sqlite
+  # 报告输出目录
+  reports_dir: data/reports
+  # 日志目录
+  logs_dir: logs
+
+eastmoney:
+  # 并发抓取线程数。东财免费接口比较宽松，8~16 比较稳妥；被封限流就调小。
+  workers: 8
+  timeout: 15.0
+  retries: 3
+  # 每次请求后的随机等待上界（秒），用于限速
+  sleep: 0.05
+  # 1=前复权（推荐，避免除权日价格断层影响涨跌幅） 0=不复权
+  kline_fqt: 1
+  # 行情列表分页大小
+  spot_page_size: 100
+
+universe:
+  # 参与扫描的板块：sh_main 沪主板 / sh_star 科创板 / sz_main 深主板 / sz_gem 创业板 / bse 北交所
+  boards: [sh_main, sh_star, sz_main, sz_gem]
+  # 剔除 ST / *ST / 退市整理股
+  exclude_st: true
+  # 当日停牌（成交量为 0）不参与扫描
+  exclude_suspended_today: true
+  # 至少要有这么多根历史K线才参与扫描（过滤新股/次新，默认 25 个交易日）
+  min_bars: 25
+
+scan:
+  # 量比窗口（今日成交量 / 之前 N 个有效交易日平均成交量）
+  windows: [5, 10, 20, 60]
+  # 稳健 Z 分数的基准窗口（对 log 成交量取中位数 + MAD）
+  baseline_window: 60
+  # 最低成交额（元），过滤掉没流动性的一字板小票噪声，默认 5000 万
+  min_amount: 50000000
+  # 最低换手率（%）
+  min_turnover: 0.5
+  # 命中规则：vol_ratio_5 >= 2.0 且 (vol_ratio_20 >= 1.5 或 vol_z60 >= 3.0)
+  vol_ratio_5_min: 2.0
+  vol_ratio_20_min: 1.5
+  z_min: 3.0
+  # 每个量比窗口内至少要有几个"有效交易日"（非停牌）才计算量比。默认 2：
+  # 停牌几天后复牌放量的票也能被识别；调到 3 则更保守（复牌急涨容易被忽略）。
+  min_valid_in_window: 2
+  # 报告输出条数上限（按 score 排序）
+  top_n: 50
+
+report:
+  formats: [console, csv, xlsx]
+  title: A股日频放量扫描
+
+notify:
+  # 默认关闭。打开后 run 命令会把命中结果推到 webhook / 邮箱。
+  enabled: false
+  webhook:
+    # type: feishu（飞书机器人）/ wecom（企业微信）/ dingtalk（钉钉）/ slack
+    type: feishu
+    url: ""
+  email:
+    enabled: false
+    host: ""
+    port: 465
+    ssl: true
+    user: ""
+    # 密码从环境变量读取，不要写进配置文件
+    password_env: EMSCAN_SMTP_PASSWORD
+    sender: ""
+    recipients: []
+  # 推送里最多带多少条明细
+  max_items: 20

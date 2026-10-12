@@ -1,0 +1,51 @@
+# 可选部署方式：如果不想放在宿主机 cron 上，就用 k8s CronJob。
+# 注意两点：
+#   1) schedule 的时间按 timeZone 解释，17:00 即北京时间 17:00；
+#   2) 行情库要挂在持久卷上，否则每次都是空库（会触发全量回补）。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: emscan-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: emscan-daily
+spec:
+  schedule: "0 17 * * 1-5"
+  timeZone: Asia/Shanghai
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: emscan
+              image: pengfu-docker.devops.pengfu.fund/quant/emscan:0.1
+              command: ["python3", "-m", "emscan", "run"]
+              workingDir: /app
+              env:
+                - name: TZ
+                  value: Asia/Shanghai
+                - name: EMSCAN_STORE_PATH
+                  value: /data/market.sqlite
+              resources:
+                requests: {cpu: "200m", memory: "512Mi"}
+                limits: {cpu: "2", memory: "2Gi"}
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: emscan-data

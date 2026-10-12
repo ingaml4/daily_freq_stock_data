@@ -1,0 +1,7 @@
+# 运行依赖（均已在 jumpsrv 机器上可用，无需联网安装）
+requests>=2.25
+urllib3>=1.26
+pandas>=1.5
+numpy>=1.21
+PyYAML>=5.4
+openpyxl>=3.0
