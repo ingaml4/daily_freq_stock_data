@@ -116,6 +116,16 @@ SORTABLE: Tuple[str, ...] = tuple(key for key, _, _, sortable in COLUMNS if sort
 
 MARKET_PREFIX = {1: "SH", 0: "SZ", 2: "BJ"}
 
+# 板块筛选用的分组（沪主板/深主板合成"主板"）
+BOARD_GROUPS: Dict[str, str] = {
+    "沪主板": "主板",
+    "深主板": "主板",
+    "创业板": "创业板",
+    "科创板": "科创板",
+    "北交所": "北交所",
+}
+BOARD_GROUP_ORDER = ("主板", "创业板", "科创板", "北交所")
+
 # 展示列 -> SQL 里真正用来排序的表达式。
 # 注意 code/name/board 来自 join 的 symbols 表（别名 s），其余在 daily_signals（别名 d）；
 # 成交额展示单位是"亿"，表里存的是"元"。
@@ -531,11 +541,13 @@ def _row_payload(row: Any) -> Dict[str, Any]:
     """把一行 sqlite 记录转成模板要的字典（键与 ``COLUMNS`` 对齐）。"""
     secid = str(row["secid"])
     amount = row["amount"] if "amount" in row.keys() else None
+    board_label = BOARD_LABELS.get(str(row["board"]), str(row["board"] or ""))
     item: Dict[str, Any] = {
         "secid": secid,
+        "board_group": BOARD_GROUPS.get(board_label, board_label),
         "code": str(row["code"] or secid.split(".")[-1]),
         "name": str(row["name"] or ""),
-        "board": BOARD_LABELS.get(str(row["board"]), str(row["board"] or "")),
+        "board": board_label,
         "signals_cn": flag_names(row["signals"]),
         "url": xueqiu_url(secid),
         "amount_yi": None if amount is None else float(amount) / 1e8,
@@ -597,13 +609,24 @@ tbody td.left{text-align:left}
 tr:hover td{background:#1b1f28}
 .pos{color:var(--up)}
 .neg{color:var(--down)}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
-padding:10px 12px;margin-bottom:8px}
-.card h3{margin:0 0 6px;font-size:15px}
-.card .kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 10px;font-size:13px}
-.card .kv div{display:flex;justify-content:space-between;gap:8px;
-border-bottom:1px dashed #232833;padding:2px 0}
-.card .kv span:first-child{color:var(--muted)}
+.wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table td:first-child,table th:first-child{position:sticky;left:0;z-index:2;background:var(--card)}
+table td:nth-child(2),table th:nth-child(2){position:sticky;left:66px;
+z-index:2;background:var(--card)}
+thead th:first-child,thead th:nth-child(2){z-index:5}
+table td:first-child,table th:first-child{min-width:66px}
+.dd{position:relative}
+.dd summary{list-style:none;cursor:pointer;padding:6px 10px;border:1px solid var(--line);
+border-radius:8px;background:var(--card);color:var(--fg);font-size:13px}
+.dd summary::-webkit-details-marker{display:none}
+.dd[open] summary{border-color:var(--accent)}
+.dd-body{position:absolute;z-index:9;margin-top:6px;min-width:150px;padding:8px 10px;
+background:var(--card);border:1px solid var(--line);border-radius:10px;
+box-shadow:0 8px 20px -10px #000}
+.dd-body label{display:flex;align-items:center;gap:8px;padding:3px 0;color:var(--fg);
+font-size:13px;white-space:nowrap}
+select{background:var(--card);color:var(--fg);border:1px solid var(--line);
+border-radius:8px;padding:6px 8px;font-size:13px}
 .pager{display:flex;flex-wrap:wrap;gap:10px;align-items:center;
 justify-content:space-between;
 margin:10px 0;padding:8px 10px;background:var(--card);
@@ -615,89 +638,118 @@ color:var(--fg);cursor:pointer}
 .pager a.active{background:var(--accent);border-color:var(--accent);
 color:#08121d;font-weight:700}
 .pager a.disabled{opacity:.35;cursor:default}
-.cards{display:none}
-@media (max-width:760px){.wrap{display:none}.cards{display:block}}
+@media (max-width:760px){
+  body{font-size:13px}
+  thead th,tbody td{padding:6px;font-size:12px}
+  table td:nth-child(2),table th:nth-child(2){left:60px}
+  table td:first-child,table th:first-child{min-width:60px}
+}
 footer{color:var(--muted);font-size:11px;padding:0 12px 24px}
 """
 
 JS = """\
-// 表头排序 + 分页：都在前端做（不刷新、地址栏不变）。
-// 排序后重新排卡片、重算分页；每页行数用 localStorage 记住。
+// 表头排序 + 板块多选筛选 + 分页：全在前端（不刷新、地址栏不变），状态用 localStorage 记住。
 (function () {
   var ARROW = {asc: '\\u2191', desc: '\\u2193'};
-  var SORT_KEY = 'emscan_sort';
-  var SIZE_KEY = 'emscan_page_size';
+  var SORT_KEY = 'emscan_sort', SIZE_KEY = 'emscan_page_size', BOARD_KEY = 'emscan_boards';
   var REMEMBER = __REMEMBER_SORT__;
   var SIZES = __PAGE_SIZES__;
   var DEFAULT_SIZE = __PAGE_SIZE__;
 
   var table = document.querySelector('table');
-  var cardsBox = document.querySelector('.cards');
-  var rows = table && table.tBodies[0] ? Array.prototype.slice.call(table.tBodies[0].rows) : [];
-  var cards = cardsBox ? Array.prototype.slice.call(cardsBox.children) : [];
-  var size = DEFAULT_SIZE;
-  var page = 1;
+  var all = table && table.tBodies[0] ? Array.prototype.slice.call(table.tBodies[0].rows) : [];
+  var boxes = Array.prototype.slice.call(
+    document.querySelectorAll('.dd-body input[type=checkbox]')
+  );
+  var summary = document.getElementById('boardSummary');
+  var sizeSel = document.getElementById('pageSize');
+  var size = DEFAULT_SIZE, page = 1, on = {};
 
   function store(key, value) {
-    if (!REMEMBER) return;
-    try { window.localStorage.setItem(key, value); } catch (e) {}
+    if (REMEMBER) { try { localStorage.setItem(key, value); } catch (e) {} }
   }
   function load(key) {
     if (!REMEMBER) return null;
-    try { return window.localStorage.getItem(key); } catch (e) { return null; }
+    try { return localStorage.getItem(key); } catch (e) { return null; }
   }
-  var saved = load(SIZE_KEY);
-  if (saved && SIZES.indexOf(parseInt(saved, 10)) >= 0) size = parseInt(saved, 10);
 
-  function pages() { return Math.max(1, Math.ceil(rows.length / size)); }
-  function clamp() { if (page > pages()) page = pages(); if (page < 1) page = 1; }
+  var savedSize = load(SIZE_KEY);
+  if (savedSize && SIZES.indexOf(parseInt(savedSize, 10)) >= 0) size = parseInt(savedSize, 10);
+  if (sizeSel) sizeSel.value = String(size);
+
+  boxes.forEach(function (box) { on[box.value] = true; });
+  var savedBoards = load(BOARD_KEY);
+  if (savedBoards) {
+    var picked = savedBoards.split(',');
+    boxes.forEach(function (box) {
+      on[box.value] = picked.indexOf(box.value) >= 0;
+      box.checked = on[box.value];
+    });
+  }
+
+  function boardLabel() {
+    var off = boxes
+      .filter(function (b) { return !on[b.value]; })
+      .map(function (b) { return b.value; });
+    if (!boxes.length || !off.length) return '板块：全部';
+    if (off.length === boxes.length) return '板块：无';
+    var kept = boxes.map(function (b) { return b.value; }).filter(function (v) { return on[v]; });
+    return '板块：' + (kept.length <= 2 ? kept.join('+') : kept.length + ' 个');
+  }
+  function visibleRows() {
+    return all.filter(function (row) { return on[row.dataset.board] !== false; });
+  }
+  function pageCount(n) { return Math.max(1, Math.ceil(n / size)); }
+  function clamp(n) { if (page > pageCount(n)) page = pageCount(n); if (page < 1) page = 1; }
 
   function applyPage() {
-    clamp();
+    var list = visibleRows();
+    clamp(list.length);
     var start = (page - 1) * size, end = start + size;
-    function show(item, index) {
-      item.style.display = (index >= start && index < end) ? '' : 'none';
-    }
-    rows.forEach(show);
-    cards.forEach(show);
+    for (var i = 0; i < all.length; i++) all[i].style.display = 'none';
+    for (var j = start; j < Math.min(end, list.length); j++) list[j].style.display = '';
     document.querySelectorAll('.pager').forEach(function (pager) {
       var total = pager.querySelector('.pg-total');
-      if (total) total.textContent = rows.length;
+      if (total) total.textContent = list.length;
       var range = pager.querySelector('.pg-range');
       if (range) {
-        var last = Math.min(end, rows.length);
-        range.textContent = rows.length ? (start + 1) + '-' + last + ' 条' : '0 条';
+        var last = Math.min(end, list.length);
+        range.textContent = list.length ? (start + 1) + '-' + last + ' 条' : '0 条';
       }
       var label = pager.querySelector('.pg-page');
-      if (label) label.textContent = '第 ' + page + ' / ' + pages() + ' 页';
-      pager.querySelectorAll('.pg-size').forEach(function (btn) {
-        btn.classList.toggle('active', parseInt(btn.dataset.size, 10) === size);
-      });
+      if (label) label.textContent = '第 ' + page + ' / ' + pageCount(list.length) + ' 页';
       var prev = pager.querySelector('.pg-prev'), next = pager.querySelector('.pg-next');
       if (prev) prev.classList.toggle('disabled', page <= 1);
-      if (next) next.classList.toggle('disabled', page >= pages());
+      if (next) next.classList.toggle('disabled', page >= pageCount(list.length));
     });
+    if (summary) summary.textContent = boardLabel();
   }
 
-  document.querySelectorAll('.pager').forEach(function (pager) {
-    pager.querySelectorAll('.pg-size').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        size = parseInt(btn.dataset.size, 10) || DEFAULT_SIZE;
-        page = 1;
-        store(SIZE_KEY, size);
-        applyPage();
-      });
+  boxes.forEach(function (box) {
+    box.addEventListener('change', function () {
+      on[box.value] = box.checked;
+      page = 1;
+      store(BOARD_KEY, boxes.filter(function (b) { return on[b.value]; })
+        .map(function (b) { return b.value; }).join(','));
+      applyPage();
     });
-    pager.querySelectorAll('[data-page]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        page += (btn.dataset.page === 'next' ? 1 : -1);
-        applyPage();
-        window.scrollTo({top: 0, behavior: 'smooth'});
-      });
+  });
+  if (sizeSel) {
+    sizeSel.addEventListener('change', function () {
+      size = parseInt(sizeSel.value, 10) || DEFAULT_SIZE;
+      page = 1;
+      store(SIZE_KEY, size);
+      applyPage();
+    });
+  }
+  document.querySelectorAll('.pager [data-page]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      page += (btn.dataset.page === 'next' ? 1 : -1);
+      applyPage();
+      window.scrollTo({top: 0, behavior: 'smooth'});
     });
   });
 
-  // ---- 排序：只动 rows 数组，然后按同样顺序重排表格行与卡片
   function cellValue(row, index) {
     var cell = row.cells[index];
     if (!cell) return null;
@@ -712,16 +764,6 @@ JS = """\
     if (b === null) return -1;
     if (typeof a === 'number' && typeof b === 'number') return (a - b) * dir;
     return String(a).localeCompare(String(b), 'zh') * dir;
-  }
-  function syncCards() {
-    if (!cardsBox) return;
-    var bySid = {};
-    cards.forEach(function (card) { bySid[card.dataset.sid] = card; });
-    rows.forEach(function (row) {
-      var match = bySid[row.dataset.sid];
-      if (match) cardsBox.appendChild(match);
-    });
-    cards = Array.prototype.slice.call(cardsBox.children);
   }
   function markState(link, key, order) {
     var links = Array.prototype.slice.call(document.querySelectorAll('th a[data-sort]'));
@@ -739,21 +781,12 @@ JS = """\
       hint.dataset.key = key;
       hint.dataset.order = order;
     }
-    var form = document.querySelector('form.toolbar');
-    if (form) {
-      var s = form.querySelector('input[name=sort]'), o = form.querySelector('input[name=order]');
-      if (s) s.value = key;
-      if (o) o.value = order;
-    }
   }
   function applySort(link, order) {
     var index = link.closest('th').cellIndex;
     var dir = order === 'asc' ? 1 : -1;
-    rows.sort(function (a, b) {
-      return compare(cellValue(a, index), cellValue(b, index), dir);
-    });
-    rows.forEach(function (row) { table.tBodies[0].appendChild(row); });
-    syncCards();
+    all.sort(function (a, b) { return compare(cellValue(a, index), cellValue(b, index), dir); });
+    all.forEach(function (row) { table.tBodies[0].appendChild(row); });
     page = 1;
     applyPage();
     markState(link, link.dataset.sort, order);
@@ -769,20 +802,10 @@ JS = """\
       }
     });
   });
-  // 打开页面时套用上次的排序 + 分页
-  var savedSort = load(SORT_KEY);
-  if (savedSort) {
-    var parts = savedSort.split(':');
-    var match = links.filter(function (item) { return item.dataset.sort === parts[0]; })[0];
-    if (match) {
-      try { applySort(match, parts[1] === 'desc' ? 'desc' : 'asc'); } catch (e) {}
-    }
-  }
-  // 表头吸顶：让 thead 贴在顶部工具条下面（工具条高度会随"是否换行"变化，动态量）
+
   function syncStickyTop() {
     var head = document.querySelector('header');
-    if (!head) return;
-    document.documentElement.style.setProperty('--sticky-top', head.offsetHeight + 'px');
+    if (head) document.documentElement.style.setProperty('--sticky-top', head.offsetHeight + 'px');
   }
   syncStickyTop();
   window.addEventListener('resize', syncStickyTop);
@@ -792,9 +815,21 @@ JS = """\
       var offset = parseFloat(
         getComputedStyle(document.documentElement).getPropertyValue('--sticky-top')
       ) || 0;
-      var stuck = table.getBoundingClientRect().top < offset;
-      table.classList.toggle('stuck', stuck);
+      table.classList.toggle('stuck', table.getBoundingClientRect().top < offset);
     }, {passive: true});
+  }
+  // 点下拉外面自动收起
+  document.addEventListener('click', function (ev) {
+    document.querySelectorAll('details.dd[open]').forEach(function (dd) {
+      if (!dd.contains(ev.target)) dd.removeAttribute('open');
+    });
+  });
+
+  var savedSort = load(SORT_KEY);
+  if (savedSort) {
+    var parts = savedSort.split(':');
+    var match = links.filter(function (item) { return item.dataset.sort === parts[0]; })[0];
+    if (match) { try { applySort(match, parts[1] === 'desc' ? 'desc' : 'asc'); } catch (e) {} }
   }
   applyPage();
 })();
@@ -856,7 +891,6 @@ def render_html(
         head_cells.append(cell)
 
     body_rows = []
-    card_rows = []
     for row in ctx.rows:
         cells = []
         for key, label, fmt, _ in COLUMNS:
@@ -870,17 +904,11 @@ def render_html(
             else:
                 value = row.get(key)
                 cells.append(f'<td class="{_cell_class(key, value)}">{_fmt(value, fmt)}</td>')
-        body_rows.append(f'<tr data-sid="{html.escape(row["secid"])}">' + "".join(cells) + "</tr>")
-        kv = "".join(
-            f"<div><span>{html.escape(label)}</span><span>{_fmt(row.get(key), fmt)}</span></div>"
-            for key, label, fmt, _ in COLUMNS
-            if key not in ("code", "name")
-        )
-        card_rows.append(
-            f'<div class="card" data-sid="{html.escape(row["secid"])}"><h3>'
-            f'<a href="{html.escape(row["url"])}" target="_blank" rel="noopener">'
-            f'{html.escape(row["code"])} {html.escape(row["name"])}</a></h3>'
-            f'<div class="kv">{kv}</div></div>'
+        body_rows.append(
+            f'<tr data-sid="{html.escape(row["secid"])}" '
+            f'data-board="{html.escape(str(row.get("board_group") or ""))}">'
+            + "".join(cells)
+            + "</tr>"
         )
 
     order_cn = "升序" if ctx.order == "asc" else "降序"
@@ -926,7 +954,6 @@ def render_html(
                 + "</tr></thead><tbody>"
                 + "".join(body_rows)
                 + "</tbody></table></div>"
-                + f'<div class="cards">{"".join(card_rows)}</div>'
             )
         )
     )
@@ -938,6 +965,8 @@ def render_html(
         .replace("__TOTAL__", str(int(ctx.total)))
     )
     pager = _render_pager(int(page_size)) if ctx.rows else ""
+    groups = [g for g in BOARD_GROUP_ORDER if any(r.get("board_group") == g for r in ctx.rows)]
+    board_filter = _render_board_filter(groups)
     pager_block = pager
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
@@ -953,6 +982,7 @@ def render_html(
     <input name="q" value="{html.escape(ctx.query)}" placeholder="代码/名称" size="10">
     <button type="submit">查询</button>
     <a class="refresh" href="/signals/{ctx.view}">刷新</a>
+    {board_filter}
   </form>
 </header>
 <main>
@@ -972,22 +1002,37 @@ def render_json(ctx: PageContext) -> str:
 
 
 def _render_pager(active_size: int) -> str:
-    """分页条（每页 10/20/50/100 + 上一页/下一页）；上下各放一个，同一套 JS 驱动。"""
-    sizes = "".join(
-        '<a class="pg-size%s" data-size="%d">%d</a>'
-        % (" active" if size == active_size else "", size, size)
+    """分页条：每页行数下拉 + 上一页/下一页。"""
+    options = "".join(
+        '<option value="%d"%s>%d</option>'
+        % (size, " selected" if size == active_size else "", size)
         for size in PAGE_SIZES
     )
     return (
         '<div class="pager">'
         '<span class="pg-info">共 <b class="pg-total">-</b> 条，当前 <b class="pg-range">-</b></span>'
-        f'<span class="pg-sizes"><span class="pg-label">每页</span>{sizes}</span>'
+        '<label class="pg-sizes">每页 <select id="pageSize">' + options + "</select> 行</label>"
         '<span class="pg-nav">'
         '<a class="pg-prev" data-page="prev">上一页</a>'
         '<span class="pg-page">第 1 / 1 页</span>'
         '<a class="pg-next" data-page="next">下一页</a>'
         "</span>"
         "</div>"
+    )
+
+
+def _render_board_filter(groups) -> str:
+    """板块多选下拉（默认全选）。"""
+    if len(groups) <= 1:
+        return ""
+    items = "".join(
+        '<label><input type="checkbox" value="%s" checked>%s</label>'
+        % (html.escape(group), html.escape(group))
+        for group in groups
+    )
+    return (
+        '<details class="dd"><summary id="boardSummary">板块：全部</summary>'
+        f'<div class="dd-body">{items}</div></details>'
     )
 
 

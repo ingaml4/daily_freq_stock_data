@@ -359,7 +359,8 @@ def test_render_html_has_nav_sortable_headers_and_xueqiu_links(tmp_path):
     # 代码超链接跳雪球
     assert 'href="https://www.xueqiu.com/S/SZ000933"' in page
     # 涨跌染色 + 移动端卡片
-    assert 'class="neg"' in page and 'class="cards"' in page
+    assert 'class="neg"' in page  # 跌为绿色（A 股习惯：涨红跌绿）
+    assert 'class="cards"' not in page  # 手机端也是表格，不再用卡片
     # 名称里的 HTML 会被转义（不是当标签渲染）
     ctx2 = build_context(open_store(make_cfg(tmp_path)), view="boll_break_lower", date=date)
     assert "&lt;b&gt;润泽科技&lt;/b&gt;" in render_html(ctx2, title="t")
@@ -569,15 +570,20 @@ def test_table_has_pagination_controls(tmp_path):
     ctx = build_context(store, view="vol_spike", date=date)
     page = render_html(ctx, page_size=50)
     assert page.count('class="pager"') == 1
-    assert page.count('data-size="') == 4  # 四个档位按钮（注意别把容器 class="pg-sizes" 算进来）
+    # 每页行数是下拉框（10/20/50/100），不再是按钮组
+    assert '<select id="pageSize">' in page
     for size in ("10", "20", "50", "100"):
-        assert f'data-size="{size}"' in page
-    assert "pg-size active" in page  # 当前档高亮
+        assert f'<option value="{size}"' in page
+    # 板块筛选是多选下拉（details+checkbox），默认全选
+    assert '<details class="dd">' in page and 'id="boardSummary"' in page
+    assert 'type="checkbox"' in page and ", checked>" in page.replace(" checked>", ", checked>")
+    assert "emscan_boards" in page  # 选项记在 localStorage
     # 表头吸顶：CSS 用 --sticky-top，JS 量顶部工具条高度写进去
     assert "top:var(--sticky-top,0px)" in page
     assert "syncStickyTop" in page and "setProperty('--sticky-top'" in page
-    # 分页要能对上表格行与移动端卡片（同一 sid）
-    assert page.count('data-sid="') == 2 * len(ctx.rows)
+    # 手机端不再有卡片，全端统一表格（行数 == 数据条数）
+    assert page.count('data-sid="') == len(ctx.rows)
+    assert 'class="cards"' not in page
     # JS 里的分页参数被替换成了真实值
     assert "[10,20,50,100]" in page and "var DEFAULT_SIZE = 50;" in page
     assert "SIZE_KEY = 'emscan_page_size'" in page and "applyPage" in page
