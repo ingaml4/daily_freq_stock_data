@@ -98,7 +98,11 @@ DEFAULTS: Dict[str, Any] = {
         "port": 8080,
         "title": "A股日频信号",
         "limit": 300,  # 单页最多显示多少行
-        "token": "",  # 非空则要求 ?token=xxx；命令行 --token 优先
+        # 访问口令：设置后浏览器首次访问会跳登录页（Cookie 记住若干天），
+        # 脚本/接口也可用 HTTP Basic（curl -u ":$口令"）。留空=开放访问（只适合本机）。
+        "password": "",
+        "password_env": "EMSCAN_WEB_PASSWORD",
+        "session_days": 7,
     },
     "notify": {
         "enabled": False,
@@ -165,7 +169,8 @@ class Config:
         env_web = {
             "EMSCAN_WEB_HOST": "host",
             "EMSCAN_WEB_PORT": "port",
-            "EMSCAN_WEB_TOKEN": "token",
+            "EMSCAN_WEB_PASSWORD": "password",
+            "EMSCAN_WEB_TOKEN": "password",  # 旧名字，兼容已有部署
         }
         for env_key, cfg_key in env_web.items():
             value = os.environ.get(env_key)

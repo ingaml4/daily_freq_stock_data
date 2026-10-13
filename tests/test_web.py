@@ -1,7 +1,10 @@
 """网页端测试：导航/四个视图、排序、搜索、雪球链接、HTML 转义、HTTP 服务。"""
 
+import base64
+import http.cookiejar
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from helpers import make_cfg
@@ -10,14 +13,25 @@ from emscan.cli import open_store
 from emscan.web import (
     DEFAULT_VIEW,
     VIEWS,
+    _safe_next,
     build_context,
+    check_password,
+    check_session,
     clear_cache,
     flag_names,
+    issue_session,
     normalize_sort,
     render_html,
     serve,
     xueqiu_url,
 )
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """测试里需要看到 303 本身，而不是被自动跟随。"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 def _seed(tmp_path, config=None):
@@ -119,6 +133,18 @@ def _seed(tmp_path, config=None):
         ]
     )
     return cfg, store, date
+
+
+def test_session_and_password_helpers():
+    """会话签名/过期、口令定长比对、防开放重定向。"""
+    token = issue_session("pw", days=1)
+    assert check_session("pw", token)
+    assert not check_session("other", token)  # 换口令即全部失效
+    assert not check_session("pw", "1700000000.deadbeef")  # 签名不对
+    assert not check_session("pw", "1.x")  # 已过期
+    assert check_password("pw", "pw") and not check_password("pw", "bad")
+    assert not check_password("", "anything")  # 没设口令时不算通过
+    assert _safe_next("//evil.com/x") == "/"
 
 
 def test_xueqiu_url_and_flag_names():
@@ -280,19 +306,119 @@ def test_http_server_serves_pages_and_json(tmp_path):
 
 
 def test_http_server_token_guard(tmp_path):
+    """口令登录：没登录跳登录页；POST 口令后拿到 Cookie；Basic 认证给脚本用。"""
     _, store, date = _seed(tmp_path)
     store.close()
     cfg = make_cfg(tmp_path)
-    httpd = serve(lambda: open_store(cfg), host="127.0.0.1", port=0, token="s3cret", blocking=False)
+    httpd = serve(
+        lambda: open_store(cfg), host="127.0.0.1", port=0, password="s3cret", blocking=False
+    )
     base = f"http://127.0.0.1:{httpd.server_port}"
     try:
+        # 1) 未登录访问首页 -> 303 跳 /login
+        opener = urllib.request.build_opener(NoRedirect())
         try:
-            urllib.request.urlopen(f"{base}/", timeout=10)
-            raise AssertionError("没有 token 应该 401")
+            opener.open(f"{base}/", timeout=10)
+            raise AssertionError("未登录应该被跳转")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 303
+            assert "/login" in exc.headers.get("Location", "")
+        # 2) 登录页能打开，且不泄露数据
+        with urllib.request.urlopen(f"{base}/login", timeout=10) as resp:
+            page = resp.read().decode("utf-8")
+            assert resp.status == 200 and "口令" in page
+            assert "xueqiu.com" not in page
+        # 3) API 未登录 -> 401 JSON
+        try:
+            urllib.request.urlopen(f"{base}/api/signals", timeout=10)
+            raise AssertionError("未登录的 API 应该 401")
         except urllib.error.HTTPError as exc:
             assert exc.code == 401
-        with urllib.request.urlopen(f"{base}/?token=s3cret", timeout=10) as resp:
+        # 4) 口令错误 -> 登录页带错误提示
+        bad = urllib.request.urlopen(
+            urllib.request.Request(
+                f"{base}/login",
+                data=urllib.parse.urlencode({"password": "wrong", "next": "/"}).encode(),
+                method="POST",
+            ),
+            timeout=10,
+        )
+        assert "口令不对" in bad.read().decode("utf-8")
+        # 5) 口令正确 -> 303 + Set-Cookie，然后带 Cookie 访问首页
+        jar = http.cookiejar.CookieJar()
+        browser = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+        with browser.open(
+            urllib.request.Request(
+                f"{base}/login",
+                data=urllib.parse.urlencode(
+                    {"password": "s3cret", "next": "/signals/kdj_golden", "remember": "1"}
+                ).encode(),
+                method="POST",
+            ),
+            timeout=10,
+        ) as resp:
             assert resp.status == 200
+            assert "/signals/kdj_golden" in resp.geturl()  # 登录成功后跳到目标页
+            assert "KDJ金叉" in resp.read().decode("utf-8")
+        assert any(cookie.name == "emscan_session" for cookie in jar)
+        with browser.open(f"{base}/signals/kdj_golden", timeout=10) as resp:
+            page = resp.read().decode("utf-8")
+            assert resp.status == 200 and "KDJ金叉" in page
+            assert "退出登录" in page
+        # 6) 脚本用 Basic 认证
+        token = base64.b64encode(b":s3cret").decode()
+        req = urllib.request.Request(
+            f"{base}/api/signals?view=vol_spike", headers={"Authorization": f"Basic {token}"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+            assert payload["total"] >= 1
+        # 7) 退出登录后 Cookie 失效
+        browser.open(f"{base}/logout", timeout=10).read()
+        with browser.open(f"{base}/", timeout=10) as resp:
+            assert "请输入访问口令" in resp.read().decode("utf-8")  # 又回到登录页
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_healthz_needs_no_login(tmp_path):
+    """探活端点不校验口令（只回 ok，不含数据），给 nginx/k8s 用。"""
+    _, store, date = _seed(tmp_path)
+    store.close()
+    cfg = make_cfg(tmp_path)
+    httpd = serve(lambda: open_store(cfg), host="127.0.0.1", port=0, password="pw", blocking=False)
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{httpd.server_port}/healthz", timeout=10
+        ) as r:
+            assert r.read() == b"ok"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_login_rate_limit(tmp_path):
+    """连续失败到达上限后暂时拒绝（429），防暴力猜口令。"""
+    _, store, date = _seed(tmp_path)
+    store.close()
+    cfg = make_cfg(tmp_path)
+    httpd = serve(
+        lambda: open_store(cfg), host="127.0.0.1", port=0, password="right", blocking=False
+    )
+    base = f"http://127.0.0.1:{httpd.server_port}"
+    try:
+        last = 0
+        for _ in range(9):
+            body = urllib.parse.urlencode({"password": "nope", "next": "/"}).encode()
+            try:
+                with urllib.request.urlopen(
+                    urllib.request.Request(f"{base}/login", data=body, method="POST"), timeout=10
+                ) as resp:
+                    last = resp.status
+            except urllib.error.HTTPError as exc:
+                last = exc.code
+        assert last == 429
     finally:
         httpd.shutdown()
         httpd.server_close()

@@ -24,7 +24,7 @@ SCRIPT_NAME="$(basename "$0")"
 
 # ---------------------------------------------------------------- 默认值
 LICENCE=""
-TOKEN=""
+PASSWORD=""
 WEB_HOST="127.0.0.1"
 WEB_PORT="8080"
 DAILY_TIMES="15:32,17:15"   # 逗号分隔；只跑一次就写 "17:15"
@@ -55,8 +55,9 @@ usage() {
 
 常用选项：
   --licence <证书>      麦蕊智数 licence（不填则从环境变量 / .env / config.yaml 里找）
-  --token <口令>        网页端口令；不填则自动生成一个随机串（重复安装会保留原有的）
-  --web-host <地址>     网页监听地址，默认 127.0.0.1（对外请走反向代理或配合 --token 用 0.0.0.0）
+  --password <口令>     网页端登录口令；不填则自动生成一个随机串（重复安装会保留原有的）
+                        旧写法 --token 仍然可用，含义相同
+  --web-host <地址>     网页监听地址，默认 127.0.0.1（对外请走反向代理，或配合 --password 用 0.0.0.0）
   --web-port <端口>     网页端口，默认 8080
   --daily-times <时间>  每日跑的时间（本地北京时间），默认 "15:32,17:15"
                         说明：15:32 收盘后出放量；当天技术指标 15:35 才发布，由 17:15 那次补
@@ -72,7 +73,7 @@ usage() {
 
 示例：
   sudo scripts/install_services.sh --licence xxxx-yyyy-zzzz
-  scripts/install_services.sh --user --token 我的口令 --web-port 18080
+  scripts/install_services.sh --user --password 我的口令 --web-port 18080
   scripts/install_services.sh --dry-run --daily-times 17:15
 USAGE
 }
@@ -81,7 +82,8 @@ USAGE
 while [ $# -gt 0 ]; do
     case "$1" in
         --licence|--license) LICENCE="${2:-}"; shift 2 ;;
-        --token)             TOKEN="${2:-}"; shift 2 ;;
+        --password)          PASSWORD="${2:-}"; shift 2 ;;
+        --token)             PASSWORD="${2:-}"; shift 2 ;;   # 旧名字，等同 --password
         --web-host)          WEB_HOST="${2:-}"; shift 2 ;;
         --web-port)          WEB_PORT="${2:-}"; shift 2 ;;
         --daily-times)       DAILY_TIMES="${2:-}"; shift 2 ;;
@@ -138,7 +140,7 @@ run_priv() { # 需要 root 的操作（写 /etc、systemctl）
     fi
 }
 
-# ---------------------------------------------------------------- licence / token
+# ---------------------------------------------------------------- licence / 网页口令
 read_from_env_file() { # $1=KEY  -> 打印值（找不到则为空）
     [ -f "${ENV_FILE}" ] || return 0
     grep -E "^[[:space:]]*(export[[:space:]]+)?$1=" "${ENV_FILE}" 2>/dev/null | tail -1 |
@@ -158,14 +160,15 @@ if [ -z "${LICENCE}" ]; then
     [ -n "${LICENCE}" ] || LICENCE="$(grep -E '^[[:space:]]*licence:' "${PROJECT_DIR}/config.yaml" 2>/dev/null |
         head -1 | sed -E "s/^[[:space:]]*licence:[[:space:]]*//; s/^[\"']//; s/[\"']$//" || true)"
 fi
-if [ -z "${TOKEN}" ]; then
-    TOKEN="$(read_from_env_file EMSCAN_WEB_TOKEN)"
-    [ -n "${TOKEN}" ] || TOKEN="${EMSCAN_WEB_TOKEN:-}"
+if [ -z "${PASSWORD}" ]; then
+    PASSWORD="$(read_from_env_file EMSCAN_WEB_PASSWORD)"
+    [ -n "${PASSWORD}" ] || PASSWORD="$(read_from_env_file EMSCAN_WEB_TOKEN)"   # 旧名字兼容
+    [ -n "${PASSWORD}" ] || PASSWORD="${EMSCAN_WEB_PASSWORD:-${EMSCAN_WEB_TOKEN:-}}"
 fi
-TOKEN_GENERATED="false"
-if [ -z "${TOKEN}" ] && [ "${UNINSTALL}" != "true" ]; then
-    TOKEN="$(head -c 18 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-    TOKEN_GENERATED="true"
+PASSWORD_GENERATED="false"
+if [ -z "${PASSWORD}" ] && [ "${UNINSTALL}" != "true" ]; then
+    PASSWORD="$(head -c 18 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    PASSWORD_GENERATED="true"
 fi
 mask() { # 只露头尾，避免日志/终端泄露
     local v="${1:-}"
@@ -220,7 +223,7 @@ MAIRUI_LICENCE=${LICENCE}
 # 网页端（python3 -m emscan web / emscan-web.service）
 EMSCAN_WEB_HOST=${WEB_HOST}
 EMSCAN_WEB_PORT=${WEB_PORT}
-EMSCAN_WEB_TOKEN=${TOKEN}
+EMSCAN_WEB_PASSWORD=${PASSWORD}
 
 # 时区固定东八区（脚本内部也会再固定一次）
 TZ=Asia/Shanghai
@@ -273,7 +276,7 @@ cat <<PLAN
                     └─ emscan-web.service     （常驻网页端 http://${WEB_HOST}:${WEB_PORT}）
   环境文件        : ${ENV_FILE}（600，含证书与网页口令）
   麦蕊 licence    : $(mask "${LICENCE}")
-  网页 token      : $(mask "${TOKEN}")$([ "${TOKEN_GENERATED}" = "true" ] && echo "（本次自动生成）")
+  网页登录口令    : $(mask "${PASSWORD}")$([ "${PASSWORD_GENERATED}" = "true" ] && echo "（本次自动生成）")
   自动 enable     : ${DO_ENABLE}
 PLAN
 
@@ -288,7 +291,7 @@ if [ "${DRY_RUN}" = "true" ]; then
     log "----- ${TIMER_UNIT} -----"
     render_timer
     log "----- ${ENV_FILE} -----"
-    render_env | sed -e "s|${TOKEN}|$(mask "${TOKEN}")|"
+    render_env | sed -e "s|${PASSWORD}|$(mask "${PASSWORD}")|"
     step "将要执行的命令"
     cat <<CMDS
   install -d -m 755 ${SYSTEMD_DIR}
@@ -351,21 +354,21 @@ if [ "${DO_ENABLE}" = "true" ]; then
     if [ "${USER_MODE}" = "true" ]; then
         warn "用户级服务：想让它在退出登录后继续跑，执行 loginctl enable-linger ${RUN_USER}"
     fi
-    if [ "${WEB_HOST}" = "0.0.0.0" ] && [ -n "${TOKEN}" ]; then
-        log "  提示：网页对外监听，访问地址要带口令，例如 http://<服务器IP>:${WEB_PORT}/?token=${TOKEN}"
+    if [ "${WEB_HOST}" = "0.0.0.0" ]; then
+        log "  提示：网页对外监听，浏览器打开 http://<服务器IP>:${WEB_PORT}/ 会要求登录口令"
     fi
     step "自检：网页端能否访问"
     for i in 1 2 3 4 5 6 7 8 9 10; do
         if command -v curl >/dev/null 2>&1 &&
-            curl -fsS --max-time 3 "http://127.0.0.1:${WEB_PORT}/healthz?token=${TOKEN}" >/dev/null 2>&1; then
+            curl -fsS --max-time 3 -u ":${PASSWORD}" "http://127.0.0.1:${WEB_PORT}/" >/dev/null 2>&1; then
             log "  OK  http://127.0.0.1:${WEB_PORT}/healthz 有响应"
             break
         fi
         sleep 1
         [ "${i}" = "10" ] && warn "10 秒内没等到网页端响应：看 journalctl -u emscan-web -n 50（或 --user）"
     done
-    if [ "${TOKEN_GENERATED}" = "true" ]; then
-        log "  网页口令（自动生成，请保存；也可在 ${ENV_FILE} 里查看）：${TOKEN}"
+    if [ "${PASSWORD_GENERATED}" = "true" ]; then
+        log "  网页登录口令（自动生成，请保存；也可在 ${ENV_FILE} 里查看）：${PASSWORD}"
     fi
 else
     step "已生成单元文件（--no-enable：未执行 systemctl）"
@@ -387,7 +390,7 @@ cat <<EOF
   # 立刻手动跑一次每日任务（看效果）
   ${SYSTEMCTL[*]} start emscan-daily.service
   # 网页端
-  浏览器打开 http://${WEB_HOST}:${WEB_PORT}/?token=$(mask "${TOKEN}")   （本机可省略 ?token）
+  浏览器打开 http://${WEB_HOST}:${WEB_PORT}/        （要求用口令登录；口令见 ${ENV_FILE}）\n  # 命令行/脚本可以用 Basic 认证： curl -u ":<口令>" http://${WEB_HOST}:${WEB_PORT}/api/signals
   # 改配置后重启网页端
   ${SYSTEMCTL[*]} restart emscan-web
   # 卸载

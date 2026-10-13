@@ -22,13 +22,17 @@ from __future__ import annotations
 
 import html
 import gzip
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, List, Optional, Tuple
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from .mairui import BOARD_LABELS
 from .signals import FLAG_LABELS
@@ -106,6 +110,14 @@ SORT_COLUMN_SQL = {"amount_yi": "d.amount"}
 _CACHE: Dict[Tuple[Any, ...], "PageContext"] = {}
 _CACHE_LOCK = threading.Lock()
 _CACHE_MAX = 128
+
+# 登录会话
+SESSION_COOKIE = "emscan_session"
+DEFAULT_SESSION_DAYS = 7
+LOGIN_MAX_FAILURES = 8  # 同一 IP 在窗口内连续失败这么多次就暂时拒绝
+LOGIN_WINDOW_SECONDS = 300
+_FAILURES: Dict[str, List[float]] = {}
+_FAILURES_LOCK = threading.Lock()
 
 
 def xueqiu_url(secid: str) -> str:
@@ -277,6 +289,114 @@ def clear_cache() -> None:
         _CACHE.clear()
 
 
+# --------------------------------------------------------------------------- 登录
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def check_password(expected: str, supplied: str) -> bool:
+    """口令比对：先各自 sha256 再定长比较，避免长度/时序泄露。"""
+    if not expected:
+        return False
+    return hmac.compare_digest(_sha256(supplied or ""), _sha256(expected))
+
+
+def _sign(password: str, payload: str) -> str:
+    return hmac.new(password.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def issue_session(password: str, days: int = DEFAULT_SESSION_DAYS) -> str:
+    """签发会话 cookie 值：``到期时间.签名``（签名密钥就是口令本身，改口令即全部失效）。"""
+    expires = int(time.time()) + max(1, int(days)) * 86400
+    payload = str(expires)
+    return f"{payload}.{_sign(password, payload)}"
+
+
+def check_session(password: str, cookie: Optional[str]) -> bool:
+    """校验会话 cookie：签名对得上且没过期。"""
+    if not password or not cookie or "." not in cookie:
+        return False
+    payload, _, signature = cookie.rpartition(".")
+    if not payload.isdigit() or int(payload) < time.time():
+        return False
+    return hmac.compare_digest(signature, _sign(password, payload))
+
+
+def _login_failures(ip: str) -> int:
+    now = time.time()
+    with _FAILURES_LOCK:
+        stamps = [t for t in _FAILURES.get(ip, []) if now - t < LOGIN_WINDOW_SECONDS]
+        _FAILURES[ip] = stamps
+        return len(stamps)
+
+
+def _record_login_failure(ip: str) -> None:
+    with _FAILURES_LOCK:
+        _FAILURES.setdefault(ip, []).append(time.time())
+
+
+def _clear_login_failures(ip: str) -> None:
+    with _FAILURES_LOCK:
+        _FAILURES.pop(ip, None)
+
+
+def _safe_next(target: Optional[str]) -> str:
+    """只允许跳回本站路径，避免开放重定向。"""
+    value = str(target or "").strip()
+    if not value.startswith("/") or value.startswith("//"):
+        return "/"
+    return value.replace("\r", "").replace("\n", "")
+
+
+LOGIN_CSS = """\
+:root{--bg:#0f1115;--card:#171a21;--line:#262b36;--fg:#e8ecf3;--muted:#98a2b3;--accent:#4aa8ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);min-height:100vh;display:flex;
+align-items:center;justify-content:center;padding:20px;
+font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",Arial,sans-serif}
+form{background:var(--card);border:1px solid var(--line);border-radius:14px;
+padding:22px 20px;width:100%;max-width:360px}
+h1{margin:0 0 4px;font-size:18px}
+p.sub{margin:0 0 16px;color:var(--muted);font-size:13px}
+label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}
+input[type=password]{width:100%;padding:11px 12px;font-size:16px;border-radius:10px;
+border:1px solid var(--line);background:#12151b;color:var(--fg)}
+input[type=password]:focus{outline:none;border-color:var(--accent)}
+.row{display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--muted);font-size:13px}
+button{margin-top:18px;width:100%;padding:12px;font-size:16px;font-weight:700;
+border-radius:10px;border:1px solid var(--accent);background:var(--accent);color:#08121d}
+.err{margin-top:12px;padding:9px 10px;border-radius:8px;font-size:13px;
+background:#2a1a1a;border:1px solid #5b2a2a;color:#ffb4b4}
+.hint{margin-top:14px;color:var(--muted);font-size:12px;text-align:center}
+"""
+
+
+def render_login(title: str, next_path: str = "/", error: str = "", remember: bool = True) -> str:
+    """登录页（手机友好：大输入框、单列表单）。"""
+    error_html = f'<div class="err">{html.escape(error)}</div>' if error else ""
+    checked = " checked" if remember else ""
+    return f"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · {html.escape(title)}</title><style>{LOGIN_CSS}</style></head>
+<body>
+<form method="post" action="/login">
+  <h1>{html.escape(title)}</h1>
+  <p class="sub">请输入访问口令（安装服务时用 --password 指定）</p>
+  <label for="password">口令</label>
+  <input id="password" name="password" type="password" autocomplete="current-password"
+         autofocus required placeholder="口令">
+  <div class="row"><input id="remember" name="remember" type="checkbox" value="1"{checked}>
+    <label for="remember" style="margin:0">记住我（{DEFAULT_SESSION_DAYS} 天）</label></div>
+  <input type="hidden" name="next" value="{html.escape(next_path)}">
+  <button type="submit">登录</button>
+  {error_html}
+  <div class="hint">curl/脚本可直接用 HTTP Basic：curl -u ":$口令" http://主机:端口/api/signals</div>
+</form>
+</body></html>
+"""
+
+
 def _row_payload(row: Any) -> Dict[str, Any]:
     """把一行 sqlite 记录转成模板要的字典（键与 ``COLUMNS`` 对齐）。"""
     secid = str(row["secid"])
@@ -310,6 +430,7 @@ header{position:sticky;top:0;z-index:5;background:rgba(15,17,21,.96);
 border-bottom:1px solid var(--line);padding:10px 12px 8px}
 .brand{font-weight:700;font-size:16px;margin-bottom:8px}
 .brand span{color:var(--muted);font-weight:400;font-size:12px;margin-left:6px}
+.brand .logout{float:right;font-weight:400;font-size:12px;color:var(--muted)}
 nav{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px}
 nav a{flex:0 0 auto;padding:8px 14px;border-radius:999px;background:var(--card);
 border:1px solid var(--line);color:var(--fg);white-space:nowrap}
@@ -400,7 +521,7 @@ def _cell_class(key: str, value: Any) -> str:
     return ""
 
 
-def render_html(ctx: PageContext, title: str = "A股日频信号") -> str:
+def render_html(ctx: PageContext, title: str = "A股日频信号", show_logout: bool = False) -> str:
     """把一页渲染成完整 HTML（服务端渲染，手机/桌面同一份）。"""
     nav = []
     for key, spec in VIEWS.items():
@@ -491,7 +612,8 @@ def render_html(ctx: PageContext, title: str = "A股日频信号") -> str:
 <style>{CSS}</style></head>
 <body>
 <header>
-  <div class="brand">{html.escape(title)}<span>{html.escape(ctx.title or "")}</span></div>
+  <div class="brand">{html.escape(title)}<span>{html.escape(ctx.title or "")}</span>
+    {('<a class="logout" href="/logout">退出登录</a>') if show_logout else ""}</div>
   <nav>{"".join(nav)}</nav>
   <form class="toolbar" method="get" action="/signals/{ctx.view}">
     <label>日期 <select name="date" onchange="this.form.submit()">{dates}</select></label>
@@ -520,7 +642,8 @@ def make_handler(
     store_factory: Callable[[], Store],
     title: str = "A股日频信号",
     limit: int = 300,
-    token: str = "",
+    password: str = "",
+    session_days: int = DEFAULT_SESSION_DAYS,
 ) -> type:
     """生成一个 ``BaseHTTPRequestHandler`` 子类。
 
@@ -529,8 +652,12 @@ def make_handler(
     * ``/``                          -> 默认视图（放量）
     * ``/signals/<view>``            -> 四个主信号之一，支持 ``date/sort/order/q``
     * ``/api/signals?view=...``      -> JSON（给以后做小程序/微信/看板用）
+    * ``/login`` ``/logout``         -> 口令登录 / 退出（Cookie 会话，默认 7 天）
     * ``/healthz``                   -> 探活（**不校验口令**，只回 ``ok``、不含任何数据，
-      方便 nginx/k8s 的 healthCheck 直接打；别的路径都要口令）
+      方便 nginx/k8s 的 healthCheck 直接打）
+
+    鉴权：设置了口令就要求登录（Cookie 会话），另外支持 HTTP Basic
+    （``curl -u ":$口令"``）方便脚本/接口调用。口令为空则视为"开放访问"（只适合本机）。
     """
 
     class Handler(BaseHTTPRequestHandler):
@@ -546,11 +673,70 @@ def make_handler(
             raw = parse_qs(parsed.query)
             return {key: values[0] for key, values in raw.items() if values}
 
-        def _authorized(self, params: Dict[str, str]) -> bool:
-            if not token:
+        def _cookie(self, name: str) -> str:
+            raw = self.headers.get("Cookie", "")
+            for part in raw.split(";"):
+                key, _, value = part.strip().partition("=")
+                if key == name:
+                    return value
+            return ""
+
+        def _session_ok(self) -> bool:
+            if not password:
                 return True
-            supplied = params.get("token") or self.headers.get("X-Emscan-Token") or ""
-            return supplied == token
+            return check_session(password, self._cookie(SESSION_COOKIE))
+
+        def _basic_ok(self) -> bool:
+            if not password:
+                return True
+            header = self.headers.get("Authorization", "")
+            if not header.lower().startswith("basic "):
+                return False
+            try:
+                decoded = base64.b64decode(header.split(" ", 1)[1].strip()).decode("utf-8")
+            except Exception:
+                return False
+            _, _, supplied = decoded.partition(":")
+            return check_password(password, supplied)
+
+        def _authed(self) -> bool:
+            return self._session_ok() or self._basic_ok()
+
+        def _secure_cookie(self) -> bool:
+            return self.headers.get("X-Forwarded-Proto", "").lower() == "https"
+
+        def _set_session(self, value: str, days: int) -> None:
+            attrs = [
+                f"{SESSION_COOKIE}={value}",
+                "Path=/",
+                "HttpOnly",
+                "SameSite=Lax",
+            ]
+            if days > 0:
+                attrs.append(f"Max-Age={int(days) * 86400}")
+            if self._secure_cookie():
+                attrs.append("Secure")
+            self.send_header("Set-Cookie", "; ".join(attrs))
+
+        def _redirect(self, location: str, cookie: Optional[Tuple[str, int]] = None) -> None:
+            self.send_response(303)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            if cookie is not None:
+                self._set_session(cookie[0], cookie[1])
+            self.end_headers()
+
+        def _read_form(self, limit: int = 8192) -> Dict[str, str]:
+            try:
+                length = int(self.headers.get("Content-Length", "0") or 0)
+            except ValueError:
+                length = 0
+            if length <= 0:
+                return {}
+            body = self.rfile.read(min(length, limit)).decode("utf-8", "replace")
+            raw = parse_qs(body)
+            return {key: values[0] for key, values in raw.items() if values}
 
         def _send(self, body: bytes, status: int = 200, ctype: str = "text/html; charset=utf-8"):
             self.send_response(status)
@@ -570,12 +756,27 @@ def make_handler(
             if path == "/healthz":
                 self._send(b"ok", ctype="text/plain; charset=utf-8")
                 return
-            if not self._authorized(params):
-                self._send(
-                    "需要 token：在后面加 ?token=xxx".encode("utf-8"),
-                    401,
-                    "text/plain; charset=utf-8",
-                )
+            if path == "/login":
+                if self._session_ok():
+                    self._redirect("/")
+                    return
+                body = render_login(title, next_path=_safe_next(params.get("next")))
+                self._send(body.encode("utf-8"))
+                return
+            if path == "/logout":
+                self._redirect("/login", cookie=("", 0))
+                return
+
+            if not self._authed():
+                if path.startswith("/api/"):
+                    self._send(
+                        json.dumps({"error": "unauthorized"}, ensure_ascii=False).encode("utf-8"),
+                        401,
+                        "application/json; charset=utf-8",
+                    )
+                else:
+                    target = quote(_safe_next(self.path), safe="/?&=%")
+                    self._redirect(f"/login?next={target}")
                 return
 
             view = params.get("view")
@@ -605,7 +806,41 @@ def make_handler(
                     render_json(ctx).encode("utf-8"), ctype="application/json; charset=utf-8"
                 )
             else:
-                self._send(render_html(ctx, title=title).encode("utf-8"))
+                self._send(
+                    render_html(ctx, title=title, show_logout=bool(password)).encode("utf-8")
+                )
+
+        def do_POST(self) -> None:  # noqa: N802 - http.server 的命名约定
+            parsed = urlparse(self.path)
+            path = parsed.path.rstrip("/") or "/"
+            if path != "/login":
+                self._send(
+                    "405 Method Not Allowed".encode("utf-8"), 405, "text/plain; charset=utf-8"
+                )
+                return
+            form = self._read_form()
+            next_path = _safe_next(form.get("next"))
+            ip = self.client_address[0] if self.client_address else "?"
+            if password and _login_failures(ip) >= LOGIN_MAX_FAILURES:
+                self._send(
+                    render_login(
+                        title,
+                        next_path=next_path,
+                        error="失败次数过多，请等几分钟再试",
+                    ).encode("utf-8"),
+                    429,
+                )
+                return
+            if password and check_password(password, form.get("password", "")):
+                _clear_login_failures(ip)
+                days = session_days if form.get("remember") else 1
+                self._redirect(next_path, cookie=(issue_session(password, days), days))
+                return
+            if password:
+                _record_login_failure(ip)
+            self._send(
+                render_login(title, next_path=next_path, error="口令不对，请重试").encode("utf-8")
+            )
 
     return Handler
 
@@ -616,11 +851,14 @@ def serve(
     port: int = 8080,
     title: str = "A股日频信号",
     limit: int = 300,
-    token: str = "",
+    password: str = "",
+    session_days: int = DEFAULT_SESSION_DAYS,
     blocking: bool = True,
 ) -> ThreadingHTTPServer:
     """起一个网页服务，返回 server 对象（``blocking=False`` 时自己开线程，方便测试）。"""
-    handler = make_handler(store_factory, title=title, limit=limit, token=token)
+    handler = make_handler(
+        store_factory, title=title, limit=limit, password=password, session_days=session_days
+    )
     httpd = ThreadingHTTPServer((host, int(port)), handler)
     log.info(
         "网页端已启动：http://%s:%s/ （四个主信号：%s）",
@@ -628,12 +866,16 @@ def serve(
         httpd.server_port,
         "、".join(spec["nav"] for spec in VIEWS.values()),
     )
-    if token:
-        log.info("已开启简单口令校验：访问时带 ?token=xxx（或请求头 X-Emscan-Token）")
-    if host not in ("127.0.0.1", "localhost") and not token:
+    if password:
+        log.info("已开启口令登录：浏览器首次访问跳 /login，登录后 Cookie 记住 %s 天", session_days)
+    elif host not in ("127.0.0.1", "localhost"):
         log.warning(
-            "监听 %s 且没有设置 token：请确保只在可信网络里暴露，或用反向代理加认证/TLS", host
+            "监听 %s 但没设置口令（web.password / EMSCAN_WEB_PASSWORD 为空）："
+            "任何人都能看数据，请设置口令或用反向代理加认证/TLS",
+            host,
         )
+    else:
+        log.info("未设置口令：只监听本机，视为开放访问（对外暴露请加 --password）")
     if blocking:
         try:
             httpd.serve_forever()

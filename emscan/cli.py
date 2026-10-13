@@ -870,9 +870,15 @@ def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
 
     host = getattr(args, "host", None) or cfg.get("web.host", "127.0.0.1")
     port = int(getattr(args, "port", None) or cfg.get("web.port", 8080))
-    token = str(getattr(args, "token", None) or cfg.get("web.token", "") or "")
+    password = str(
+        getattr(args, "password", None)
+        or getattr(args, "token", None)  # --token 是旧名字，保留兼容
+        or cfg.get("web.password", "")
+        or ""
+    )
     title = str(cfg.get("web.title", "A股日频信号"))
     limit = int(getattr(args, "limit", None) or cfg.get("web.limit", 300) or 300)
+    session_days = int(cfg.get("web.session_days", 7) or 7)
 
     store = open_store(cfg)
     if not store.latest_signal_date():
@@ -884,7 +890,15 @@ def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
         return open_store(cfg)
 
     try:
-        serve(factory, host=host, port=port, title=title, limit=limit, token=token)
+        serve(
+            factory,
+            host=host,
+            port=port,
+            title=title,
+            limit=limit,
+            password=password,
+            session_days=session_days,
+        )
     except OSError as exc:
         log.error("端口 %s 起不来（%s）：换一个 --port，或先关掉占用的进程", port, exc)
         return 1
@@ -981,7 +995,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_web = sub.add_parser("web", help="启动网页端：四个主信号查询 + 可排序表格（代码跳雪球）")
     p_web.add_argument("--host", help="监听地址，默认 127.0.0.1（只本机）；对外用 0.0.0.0")
     p_web.add_argument("--port", type=int, help="端口，默认 8080")
-    p_web.add_argument("--token", help="简单口令：访问时带 ?token=xxx（或请求头 X-Emscan-Token）")
+    p_web.add_argument(
+        "--password",
+        help="访问口令：浏览器首次访问跳登录页，登录后 Cookie 记住若干天（也可用 EMSCAN_WEB_PASSWORD）",
+    )
+    p_web.add_argument("--token", dest="token", help="（已废弃，等同 --password）")
     p_web.add_argument("--limit", type=int, help="单页最多显示多少行，默认 300")
     return parser
 

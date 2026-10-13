@@ -40,7 +40,7 @@ bash scripts/daily_scan.sh                  # 以后每天由 cron 跑这一条
 | `python3 -m emscan scan [--trade-date YYYY-MM-DD]` | 用本地数据做放量扫描（可回看历史某天） |
 | `python3 -m emscan signals [--rules ...] [--trade-date ...]` | 用本地数据筛指标信号 |
 | `python3 -m emscan hits [--date ...] [--secid ...] [--only ...]` | **查每日信号缓存**（四个主信号，不联网、秒回） |
-| `python3 -m emscan web [--host ...] [--port ...] [--token ...]` | **起网页端**：四个查询按钮 + 可排序表格（代码跳雪球） |
+| `python3 -m emscan web [--host ...] [--port ...] [--password ...]` | **起网页端**：四个查询按钮 + 可排序表格（口令登录，代码跳雪球） |
 | `python3 -m emscan demo` | 无网络自检：合成行情跑通"落库→扫描→报告" |
 | `python3 -m emscan init` | 只初始化行情库 |
 
@@ -116,7 +116,7 @@ ORDER BY vol_ratio_5 DESC;
 
 ```bash
 python3 -m emscan web                          # 打开 http://127.0.0.1:8080/（默认只本机）
-python3 -m emscan web --host 0.0.0.0 --token 我的口令    # 对外暴露：务必带 token 或用反向代理
+python3 -m emscan web --host 0.0.0.0 --password 我的口令   # 对外暴露：设口令（或走反向代理 + TLS）
 ```
 
 页面就一件事：把缓存里的信号按天摊开看。结构：
@@ -143,13 +143,17 @@ python3 -m emscan web --host 0.0.0.0 --token 我的口令    # 对外暴露：�
 
 ### 部署与安全
 
-* 默认只监听 `127.0.0.1`（本机）。要手机上访问，两种做法：
-  1. **反代出去**（推荐）：`nginx`/`Caddy` 加 TLS + Basic Auth，转发到 `127.0.0.1:8080`；
-  2. 临时直连：`--host 0.0.0.0 --token 随机串`，访问时带 `?token=随机串`
-     （不给 token 就 401）。注意 http 是明文的，公网务必上 TLS。
+* **登录方式**：启动时指定口令（`--password` 或环境变量 `EMSCAN_WEB_PASSWORD`），
+  浏览器第一次访问会跳 `/login`，输一次口令后写 Cookie（默认记 7 天，勾"记住我"），
+  页面右上角有"退出登录"。口令比较用定长比较、同一 IP 连续失败 8 次会暂时 429，防暴力猜。
+* **脚本/接口**：可以用 HTTP Basic 免 Cookie，例如
+  `curl -u ":$口令" "http://主机:8080/api/signals?view=macd_golden"`。
+* **默认只监听 `127.0.0.1`**（本机）。要手机上访问，两种做法：
+  1. **反代出去**（推荐）：`nginx`/`Caddy` 加 TLS，转发到 `127.0.0.1:8080`（反代记得透传 `X-Forwarded-Proto`，会一并给 Cookie 加 `Secure`）；
+  2. 临时直连：`--host 0.0.0.0 --password 口令`。注意 http 是明文的，公网务必上 TLS。
 * systemd 常驻：一条命令 `sudo scripts/install_services.sh --licence <证书>`（见"部署"一节），
-  监听地址/端口/口令都走环境文件里的 `EMSCAN_WEB_HOST` / `EMSCAN_WEB_PORT` / `EMSCAN_WEB_TOKEN`。
-* `/healthz` 不校验口令（只回 `ok`、不含任何数据），方便给 nginx / k8s 探活；其余路径都要 `?token=`。
+  监听地址/端口/口令都走环境文件里的 `EMSCAN_WEB_HOST` / `EMSCAN_WEB_PORT` / `EMSCAN_WEB_PASSWORD`。
+* `/healthz` 不校验口令（只回 `ok`、不含任何数据），方便给 nginx / k8s 探活；其余页面/API 都要登录。
 * 只读 SQLite（WAL），所以**页面和 `run` 可以同时跑**，不会互相阻塞。
 
 ### 性能：为什么用标准库 `http.server` 就够了
@@ -402,7 +406,7 @@ sudo scripts/install_services.sh --licence <你的麦蕊证书>
 scripts/install_services.sh --dry-run --licence <证书>
 
 # 免 root：装成用户级服务（~/.config/systemd/user，用 systemctl --user 管）
-scripts/install_services.sh --user --token <网页口令>
+scripts/install_services.sh --user --password <网页口令>
 
 # 卸载（环境文件默认保留，想一起删加 --purge）
 scripts/install_services.sh --uninstall
@@ -411,9 +415,9 @@ scripts/install_services.sh --uninstall
 脚本做的事：渲染 `deploy/systemd/*.in` 模板（替换项目目录 / python 解释器 / 运行用户）→
 生成 `0600` 的环境文件（麦蕊证书 + `EMSCAN_WEB_HOST/PORT/TOKEN`）→ `systemd-analyze verify` 校验 →
 `systemctl daemon-reload` + `enable --now` → 用 `curl /healthz` 自检网页端是否起来。
-重复执行等于"更新配置"（已生成的口令会保留，除非显式传 `--token`）。
+重复执行等于"更新配置"（已生成的口令会保留，除非显式传 `--password`）。
 
-常用开关：`--web-host 0.0.0.0`（对外，配合 `--token`）、`--web-port 8080`、
+常用开关：`--web-host 0.0.0.0`（对外，配合 `--password`）、`--web-port 8080`、
 `--daily-times "15:32,17:15"`（写成 `"17:15"` 就是每天只跑一次）、`--python /usr/bin/python3`、
 `--no-enable`（只生成文件不 enable）。装完可以先用 `systemctl start emscan-daily.service` 立刻试跑一次。
 
