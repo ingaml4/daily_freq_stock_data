@@ -529,7 +529,8 @@ def make_handler(
     * ``/``                          -> 默认视图（放量）
     * ``/signals/<view>``            -> 四个主信号之一，支持 ``date/sort/order/q``
     * ``/api/signals?view=...``      -> JSON（给以后做小程序/微信/看板用）
-    * ``/healthz``                   -> 探活
+    * ``/healthz``                   -> 探活（**不校验口令**，只回 ``ok``、不含任何数据，
+      方便 nginx/k8s 的 healthCheck 直接打；别的路径都要口令）
     """
 
     class Handler(BaseHTTPRequestHandler):

@@ -1,0 +1,22 @@
+#TPL# 模板：不要直接 cp，用 scripts/install_services.sh 生成
+#TPL# 监听地址/端口/口令都从环境文件读（EMSCAN_WEB_HOST / EMSCAN_WEB_PORT / EMSCAN_WEB_TOKEN）
+[Unit]
+Description=emscan 网页端（四个主信号查询：放量 / MACD金叉 / KDJ金叉 / 布林下轨）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__PROJECT_DIR__
+EnvironmentFile=-__ENV_FILE__
+Environment=TZ=Asia/Shanghai
+Environment=PYTHONUNBUFFERED=1
+User=__RUN_USER__
+ExecStart=__PYTHON_BIN__ -m emscan web
+Restart=always
+RestartSec=3
+Nice=5
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

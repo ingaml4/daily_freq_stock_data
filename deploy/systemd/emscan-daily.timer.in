@@ -1,0 +1,14 @@
+#TPL# 模板：由 scripts/install_services.sh 生成；__ONCALENDAR__ 展开成一行或多行 OnCalendar=
+[Unit]
+Description=emscan 定时触发（脚本自己判断是否交易日，休市直接退出）
+
+[Timer]
+__ONCALENDAR__
+Timezone=Asia/Shanghai
+# 机器临时关机/重启错过触发时，尽快补跑一次
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

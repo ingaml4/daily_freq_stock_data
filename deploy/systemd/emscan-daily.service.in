@@ -1,0 +1,19 @@
+#TPL# 模板：不要直接 cp，用 scripts/install_services.sh 生成（会把下面占位符替换掉）
+#TPL#   __PROJECT_DIR__ 项目目录 / __PYTHON_BIN__ 解释器 / __RUN_USER__ 运行用户 / __ENV_FILE__ 环境文件
+[Unit]
+Description=emscan 每日任务：自愈同步 + 放量扫描 + 指标信号 + 报告/推送
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__PROJECT_DIR__
+EnvironmentFile=-__ENV_FILE__
+Environment=TZ=Asia/Shanghai
+Environment=PYTHONUNBUFFERED=1
+User=__RUN_USER__
+ExecStart=__PYTHON_BIN__ -m emscan run
+# 一次 run 里含"指标 3×股票数"次请求，300 次/分的档位约 1 小时；给足 3 小时
+TimeoutStartSec=10800
+Nice=10
+NoNewPrivileges=yes

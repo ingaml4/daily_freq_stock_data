@@ -147,7 +147,9 @@ python3 -m emscan web --host 0.0.0.0 --token 我的口令    # 对外暴露：�
   1. **反代出去**（推荐）：`nginx`/`Caddy` 加 TLS + Basic Auth，转发到 `127.0.0.1:8080`；
   2. 临时直连：`--host 0.0.0.0 --token 随机串`，访问时带 `?token=随机串`
      （不给 token 就 401）。注意 http 是明文的，公网务必上 TLS。
-* systemd 常驻：`deploy/systemd/emscan-web.service`（`EMSCAN_WEB_HOST/PORT/TOKEN` 走 `EnvironmentFile`）。
+* systemd 常驻：一条命令 `sudo scripts/install_services.sh --licence <证书>`（见"部署"一节），
+  监听地址/端口/口令都走环境文件里的 `EMSCAN_WEB_HOST` / `EMSCAN_WEB_PORT` / `EMSCAN_WEB_TOKEN`。
+* `/healthz` 不校验口令（只回 `ok`、不含任何数据），方便给 nginx / k8s 探活；其余路径都要 `?token=`。
 * 只读 SQLite（WAL），所以**页面和 `run` 可以同时跑**，不会互相阻塞。
 
 ### 性能：为什么用标准库 `http.server` 就够了
@@ -382,18 +384,48 @@ CRON_TZ=Asia/Shanghai
 
 ## 部署
 
-三种方式任选，都是跑 `python3 -m emscan run`：
+### 方式 A：systemd 服务（推荐，一条命令装好）
+
+`scripts/install_services.sh` 装两个**常规 systemd 服务**（都能 `systemctl enable`），
+不用一直开着终端窗口：
+
+| 服务 | 作用 | 管理 |
+| --- | --- | --- |
+| `emscan-daily.timer` + `emscan-daily.service` | 每交易日 **15:32 / 17:15** 跑 `emscan run`（自愈同步 + 放量扫描 + 指标信号 + 报告/推送） | `systemctl list-timers emscan-daily.timer`、`systemctl start emscan-daily` |
+| `emscan-web.service` | 常驻网页端（四个查询按钮 + 可排序表格），崩了自动重启 | `systemctl restart emscan-web`、`journalctl -u emscan-web -f` |
 
 ```bash
-# ① 宿主机 cron（最简单）
-crontab -e        # 粘贴 scripts/crontab.example 里的两行
+# ① 装 + enable + 立即启动（写 /etc/systemd/system 与 /etc/emscan/emscan.env，需要 sudo）
+sudo scripts/install_services.sh --licence <你的麦蕊证书>
+
+# 先看看它会写什么、做什么（什么都不改、不动 systemd）
+scripts/install_services.sh --dry-run --licence <证书>
+
+# 免 root：装成用户级服务（~/.config/systemd/user，用 systemctl --user 管）
+scripts/install_services.sh --user --token <网页口令>
+
+# 卸载（环境文件默认保留，想一起删加 --purge）
+scripts/install_services.sh --uninstall
+```
+
+脚本做的事：渲染 `deploy/systemd/*.in` 模板（替换项目目录 / python 解释器 / 运行用户）→
+生成 `0600` 的环境文件（麦蕊证书 + `EMSCAN_WEB_HOST/PORT/TOKEN`）→ `systemd-analyze verify` 校验 →
+`systemctl daemon-reload` + `enable --now` → 用 `curl /healthz` 自检网页端是否起来。
+重复执行等于"更新配置"（已生成的口令会保留，除非显式传 `--token`）。
+
+常用开关：`--web-host 0.0.0.0`（对外，配合 `--token`）、`--web-port 8080`、
+`--daily-times "15:32,17:15"`（写成 `"17:15"` 就是每天只跑一次）、`--python /usr/bin/python3`、
+`--no-enable`（只生成文件不 enable）。装完可以先用 `systemctl start emscan-daily.service` 立刻试跑一次。
+
+> 首次部署建议先手动验证：`python3 -m emscan check --probe`、`python3 -m emscan sync --limit 50`。
+
+### 方式 B：cron / k8s（已有运维体系时）
+
+```bash
+# cron：crontab -e 后粘贴 scripts/crontab.example 里的两行
 bash scripts/daily_scan.sh        # 先手动试跑：增量更新 + 扫描 + 报告 + 推送
 
-# ② systemd timer（服务器上更稳，带失败重启与日志归集）
-sudo cp deploy/systemd/*.service deploy/systemd/*.timer /etc/systemd/system/
-sudo systemctl enable --now emscan-daily.timer
-
-# ③ k8s CronJob（跑在已有集群上，零新增服务器）
+# k8s CronJob（跑在已有集群上，零新增服务器；默认也是 15:32 + 17:15 两个 Job）
 kubectl apply -f deploy/k8s-cronjob.yaml      # 注意先把 licence 放进 Secret
 ```
 
@@ -436,8 +468,8 @@ emscan/
   tzutil.py     东八区时间（所有"今天/现在"的唯一入口）
   demo.py       合成行情生成器（构造各类边界样本）
   cli.py        命令行入口
-scripts/         daily_scan.sh（cron 用）、crontab.example、push_to_github.sh
-deploy/          k8s CronJob + PVC、systemd service/timer
+scripts/         install_services.sh（一键装 systemd 服务）、daily_scan.sh、crontab.example、push_to_github.sh
+deploy/          k8s CronJob + PVC、systemd 单元模板（*.in，由 install_services.sh 渲染）
 docs/            docs/mairui_api.md（接口字段与踩坑记录）
 tests/           74 个单元/集成测试
 data/            market.sqlite + reports/（已 gitignore）
