@@ -15,19 +15,42 @@ DEFAULTS: Dict[str, Any] = {
         "reports_dir": "data/reports",
         "logs_dir": "logs",
     },
-    "eastmoney": {
+    "mairui": {
+        # 麦蕊智数证书（licence）：https://www.mairui.club 免费领取；
+        # 也可用环境变量 MAIRUI_LICENCE / EMSCAN_LICENCE 覆盖，避免把证书写进仓库
+        "licence": "",
+        "base_url": "https://api.mairuiapi.com",
         "workers": 8,
         "timeout": 15.0,
         "retries": 3,
         "sleep": 0.05,
-        "kline_fqt": 1,
-        "spot_page_size": 100,
+        # 证书限流（次/分钟）：按文档填 300（基础）/1000（包月）/3000（包年）/6000（钻石）
+        "rate_limit_per_min": 300,
+        # 快照取数方式：auto=全市场→多股→单股逐级降级；也可强制 all/more/single
+        "spot_mode": "auto",
+        # 多股快照一次最多 20 只（接口上限）
+        "multi_batch": 20,
+        # 日线参数：d=日线；除权方式 n=不复权 f=前复权 b=后复权 fr/br=等比
+        "kline_level": "d",
+        "kline_adjust": "f",
+        # 回补时每批处理多少只股票：批越大越快，但内存占用越高（400 只 ≈ 30 万行 ≈ 150MB）
+        "backfill_batch": 400,
+        # 没有流通股本时，是否逐只抓《股票基础信息》补 fv（首次全市场会多花十几分钟）
+        "fetch_instrument": False,
     },
     "universe": {
         "boards": ["sh_main", "sh_star", "sz_main", "sz_gem"],
         "exclude_st": True,
         "exclude_suspended_today": True,
         "min_bars": 25,
+    },
+    # 自愈同步：脚本自己判断"缺了什么"，窗口决定往前比对多少天
+    "reconcile_calendar_days": 45,
+    "sync": {
+        # 首次回补只回补这个日期之后的日线（默认"从头"）；想省时间可以设近三年
+        "history_start": "1990-01-01",
+        # 单次运行最多处理多少只股票（0=不限）。限流小或想快速收敛时可设 800
+        "max_symbols_per_run": 0,
     },
     "scan": {
         "windows": [5, 10, 20, 60],
@@ -38,11 +61,44 @@ DEFAULTS: Dict[str, Any] = {
         "vol_ratio_20_min": 1.5,
         "z_min": 3.0,
         "min_valid_in_window": 2,
+        # 扫描时需要读回多少个自然日的行情：60 个交易日基准 ≈ 90 自然日，
+        # 留出春节/国庆等长假冗余，140 足够，且能显著降低内存占用
+        "lookback_calendar_days": 140,
         "top_n": 50,
     },
     "report": {
         "formats": ["console", "csv", "xlsx"],
         "title": "A股日频放量扫描",
+    },
+    "indicators": {
+        "enabled": True,
+        "kinds": ["macd", "kdj", "boll"],
+        # 日更时只取最近 N 条（0=全部历史）
+        "limit": 10,
+        # 当日指标几点发布：麦蕊标注日线指标 15:35 更新。早于这个时间运行就跳过当天
+        # （否则会为全市场白跑一遍请求），当天稍后/第二天再补。
+        "publish_time": "15:35",
+    },
+    "signals": {
+        "enabled": True,
+        "title": "A股日频指标信号",
+        "match": "any",
+        # 默认只报"四个主信号"里的三个指标信号（放量由 scan 负责）：
+        # MACD 金叉 / KDJ 金叉 / BOLL 下轨突破
+        "rules": ["macd_golden", "kdj_golden", "boll_break_lower"],
+        "min_amount": 0,
+        "lookback_calendar_days": 30,
+        "top_n": 200,
+        # 当天指标还没发布时，是否允许退回用最近一个交易日出报告（默认允许，日志会写明）
+        "require_trade_date": False,
+    },
+    "web": {
+        # 网页端：python3 -m emscan web
+        "host": "127.0.0.1",  # 只本机可访问；要对外就改 0.0.0.0（记得配 token / 反代认证）
+        "port": 8080,
+        "title": "A股日频信号",
+        "limit": 300,  # 单页最多显示多少行
+        "token": "",  # 非空则要求 ?token=xxx；命令行 --token 优先
     },
     "notify": {
         "enabled": False,
@@ -101,6 +157,20 @@ class Config:
         env_store = os.environ.get("EMSCAN_STORE_PATH")
         if env_store:
             data["store"]["path"] = env_store
+        # 证书（licence）优先读环境变量：避免把证书写进仓库/镜像
+        env_licence = os.environ.get("MAIRUI_LICENCE") or os.environ.get("EMSCAN_LICENCE")
+        if env_licence:
+            data["mairui"]["licence"] = env_licence
+        # 网页端的监听/口令也支持环境变量（systemd EnvironmentFile 里放这些最方便）
+        env_web = {
+            "EMSCAN_WEB_HOST": "host",
+            "EMSCAN_WEB_PORT": "port",
+            "EMSCAN_WEB_TOKEN": "token",
+        }
+        for env_key, cfg_key in env_web.items():
+            value = os.environ.get(env_key)
+            if value:
+                data["web"][cfg_key] = int(value) if cfg_key == "port" else value
         return cls(data, root=root, source=source)
 
     # ------------------------------------------------------------------ 取值

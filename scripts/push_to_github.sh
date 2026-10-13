@@ -15,7 +15,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE_URL="${1:-https://github.com/ingaml4/daily_freq_stock_data.git}"
 BRANCH="${BRANCH:-main}"
 FORCE="${2:-}"
-COMMIT_MSG="feat: A股日频放量扫描（东财日线落库 + 盘后全市场扫描 + 报告/推送 + 部署脚本）"
+COMMIT_MSG="feat: 数据源换麦蕊智数 + 自愈同步同步缺口 + 日频指标(金叉/布林下轨)信号 + 每日信号缓存 + 网页端(四按钮/表头排序/跳雪球) + systemd 单元"
 
 cd "${PROJECT_DIR}"
 

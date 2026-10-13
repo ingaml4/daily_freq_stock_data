@@ -1,7 +1,12 @@
-# 可选部署方式：如果不想放在宿主机 cron 上，就用 k8s CronJob。
-# 注意两点：
-#   1) schedule 的时间按 timeZone 解释，17:00 即北京时间 17:00；
-#   2) 行情库要挂在持久卷上，否则每次都是空库（会触发全量回补）。
+# 用 k8s CronJob 跑 emscan（跑在已有集群上，零新增服务器）。
+#
+# 部署：
+#   kubectl create secret generic emscan-licence \
+#     --from-literal=MAIRUI_LICENCE=你的证书       # 不要写进 yaml / git
+#   kubectl apply -f deploy/k8s-cronjob.yaml
+#   kubectl create job --from=cronjob/emscan-daily emscan-manual   # 手动触发一次试跑
+#
+# 注意：行情库必须挂持久卷，否则每次都是空库（会触发全量回补）。
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -17,7 +22,9 @@ kind: CronJob
 metadata:
   name: emscan-daily
 spec:
-  schedule: "0 17 * * 1-5"
+  # 交易日 15:32：收盘后第一次，落当日行情 + 放量扫描（当日指标 15:35 才发布，
+  # 这一步会自动跳过它，由下面 17:15 那个 Job 补齐）。
+  schedule: "32 15 * * 1-5"
   timeZone: Asia/Shanghai
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
@@ -25,6 +32,8 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      # 单次任务最多跑 3 小时（含同步+扫描+信号）
+      activeDeadlineSeconds: 10800
       backoffLimit: 2
       template:
         spec:
@@ -39,6 +48,58 @@ spec:
                   value: Asia/Shanghai
                 - name: EMSCAN_STORE_PATH
                   value: /data/market.sqlite
+                # 证书走 Secret（下面的 secretKeyRef）
+                - name: MAIRUI_LICENCE
+                  valueFrom:
+                    secretKeyRef:
+                      name: emscan-licence
+                      key: MAIRUI_LICENCE
+              resources:
+                requests: {cpu: "200m", memory: "512Mi"}
+                limits: {cpu: "2", memory: "2Gi"}
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: emscan-data
+---
+# 交易日 17:15 再跑一次：补当天技术指标（麦蕊 15:35 发布）+ 出金叉/布林信号报告。
+# 15:32 那次已经落好当日行情和放量结果，两次都是幂等的，重复执行不会写坏数据。
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: emscan-indicators
+spec:
+  schedule: "15 17 * * 1-5"
+  timeZone: Asia/Shanghai
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 10800
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: emscan
+              image: pengfu-docker.devops.pengfu.fund/quant/emscan:0.1
+              command: ["python3", "-m", "emscan", "run"]
+              workingDir: /app
+              env:
+                - name: TZ
+                  value: Asia/Shanghai
+                - name: EMSCAN_STORE_PATH
+                  value: /data/market.sqlite
+                - name: MAIRUI_LICENCE
+                  valueFrom:
+                    secretKeyRef:
+                      name: emscan-licence
+                      key: MAIRUI_LICENCE
               resources:
                 requests: {cpu: "200m", memory: "512Mi"}
                 limits: {cpu: "2", memory: "2Gi"}

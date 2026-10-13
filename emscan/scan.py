@@ -31,15 +31,51 @@ SIGNAL_DOWN = "放量下跌"
 SIGNAL_FLAT = "放量滞涨"
 SIGNAL_CHOP = "放量震荡"
 
+# 扫描真正用到的列：读取时只取这些，行情库再大也不会把内存吃满
+SCAN_COLUMNS = (
+    "secid",
+    "date",
+    "volume",
+    "close",
+    "pct_chg",
+    "amount",
+    "turnover",
+    "float_mv",
+    "volume_ratio",
+)
+
 
 @dataclass
 class ScanResult:
     trade_date: str
     hits: pd.DataFrame
     stats: Dict[str, Any] = field(default_factory=dict)
+    # 全市场指标（不只命中）：写"每日信号缓存"用，扫描时顺手算好，避免重复计算
+    all_metrics: Optional[pd.DataFrame] = None
 
     def __len__(self) -> int:
         return len(self.hits)
+
+
+# 写进 daily_signals 缓存的列（放量那部分）
+DAILY_VOLUME_COLUMNS: tuple = (
+    "secid",
+    "date",
+    "close",
+    "pct_chg",
+    "volume",
+    "amount",
+    "turnover",
+    "vol_ratio_5",
+    "vol_ratio_10",
+    "vol_ratio_20",
+    "vol_ratio_60",
+    "vol_z60",
+    "spot_volume_ratio",
+    "vol_signal",
+    "vol_score",
+    "s_vol_spike",
+)
 
 
 def result_columns(windows: Sequence[int], baseline_window: int) -> List[str]:
@@ -57,7 +93,7 @@ def result_columns(windows: Sequence[int], baseline_window: int) -> List[str]:
         "volume",
     ]
     cols += [f"vol_ratio_{int(n)}" for n in windows]
-    cols += [f"vol_z{int(baseline_window)}", "em_volume_ratio", "valid_bars", "signal", "score"]
+    cols += [f"vol_z{int(baseline_window)}", "spot_volume_ratio", "valid_bars", "signal", "score"]
     return cols
 
 
@@ -213,7 +249,22 @@ def scan(
     rule = (vr5 >= v5_min) & ((vr20 >= v20_min) | (zcol >= z_min)).fillna(False)
     rule = rule.fillna(False) & vr5.notna()
 
-    hits = res[eligible & rule].copy()
+    # ---- 全市场指标（给每日信号缓存）：命中与否都留一份，方便以后按别的阈值再筛
+    selected = eligible & rule
+    full = res.copy()
+    full["date"] = trade_date  # 放量指标是按"当天"算的：缓存行必须带交易日
+    full["s_vol_spike"] = selected.astype(int)
+    full["vol_signal"] = np.where(full["s_vol_spike"] > 0, _classify(full["pct_chg"]), None)
+    full["vol_score"] = np.where(
+        full["s_vol_spike"] > 0, _score(full, baseline_window).to_numpy(dtype=float), np.nan
+    )
+    full_out = full.reset_index()
+    for column in DAILY_VOLUME_COLUMNS:
+        if column not in full_out.columns:
+            full_out[column] = np.nan
+    all_metrics = full_out[list(DAILY_VOLUME_COLUMNS)]
+
+    hits = res[selected].copy()
     stats: Dict[str, Any] = {
         "trade_date": trade_date,
         "universe": int(len(secids)),
@@ -231,13 +282,13 @@ def scan(
     if hits.empty:
         result = _empty_result(windows, baseline_window)
         result.attrs["stats"] = stats
-        return ScanResult(trade_date, result, stats)
+        return ScanResult(trade_date, result, stats, all_metrics)
 
     hits["amount_yi"] = hits["amount"] / 1e8
     hits["signal"] = _classify(hits["pct_chg"])
     hits["score"] = _score(hits, baseline_window)
-    # 东财快照自带的"量比"字段，留一份便于和自算量比交叉验证
-    hits["em_volume_ratio"] = hits["volume_ratio"]
+    # 行情快照自带的"量比"字段，留一份便于和自算量比交叉验证
+    hits["spot_volume_ratio"] = hits["volume_ratio"]
     hits = hits.sort_values(["score", "amount"], ascending=False).head(top_n)
 
     for col in columns:
@@ -247,7 +298,7 @@ def scan(
         hits[col] = np.nan
     result = hits.reset_index()[columns]
     result.attrs["stats"] = stats
-    return ScanResult(trade_date, result, stats)
+    return ScanResult(trade_date, result, stats, all_metrics)
 
 
 def _classify(pct_chg: pd.Series) -> np.ndarray:

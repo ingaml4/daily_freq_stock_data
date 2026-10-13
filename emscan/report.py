@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Sequence
 
 import pandas as pd
 
-from .eastmoney import BOARD_LABELS
+from .mairui import BOARD_LABELS
 from .scan import ScanResult
 
 log = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ COLUMN_LABELS: Dict[str, str] = {
     "turnover": "换手率%",
     "volume": "成交量(手)",
     "volume_ratio": "量比",
-    "em_volume_ratio": "东财量比",
+    "spot_volume_ratio": "快照量比",
     "valid_bars": "有效K线",
     "signal": "形态",
     "score": "评分",
@@ -63,7 +63,7 @@ FLOAT_FORMATS: Dict[str, str] = {
     "vol_ratio_60": "{:.2f}",
     "vol_z60": "{:.1f}",
     "score": "{:.2f}",
-    "em_volume_ratio": "{:.2f}",
+    "spot_volume_ratio": "{:.2f}",
 }
 
 
@@ -79,7 +79,12 @@ def _pad(text: str, width: int, align: str = "left") -> str:
     return (" " * gap + text) if align == "right" else (text + " " * gap)
 
 
-def _cell(row: pd.Series, column: str, float_formats: Dict[str, str]) -> str:
+def _cell(
+    row: pd.Series,
+    column: str,
+    float_formats: Dict[str, str],
+    labels: Optional[Dict[str, str]] = None,
+) -> str:
     value = row.get(column)
     if value is None:
         return "-"
@@ -101,16 +106,18 @@ def render_table(
     columns: Sequence[str] = tuple(CONSOLE_COLUMNS),
     max_rows: Optional[int] = None,
     float_formats: Optional[Dict[str, str]] = None,
+    labels: Optional[Dict[str, str]] = None,
 ) -> str:
     """把命中结果渲染成等宽的纯文本表格。"""
     if frame is None or frame.empty:
         return "（无命中）"
     fmts = float_formats or FLOAT_FORMATS
+    label_map = labels or COLUMN_LABELS
     columns = [c for c in columns if c in frame.columns]
     subset = frame if max_rows is None else frame.head(int(max_rows))
 
-    headers = [COLUMN_LABELS.get(c, c) for c in columns]
-    body = [[_cell(row, c, fmts) for c in columns] for _, row in subset.iterrows()]
+    headers = [label_map.get(c, c) for c in columns]
+    body = [[_cell(row, c, fmts, label_map) for c in columns] for _, row in subset.iterrows()]
     widths = [
         (
             max(display_width(headers[i]), *(display_width(r[i]) for r in body))
@@ -119,21 +126,8 @@ def render_table(
         )
         for i in range(len(columns))
     ]
-    # 数值列右对齐，文本列左对齐
-    right_align = {
-        "close",
-        "pct_chg",
-        "turnover",
-        "amount_yi",
-        "vol_ratio_5",
-        "vol_ratio_10",
-        "vol_ratio_20",
-        "vol_ratio_60",
-        "vol_z60",
-        "score",
-        "em_volume_ratio",
-        "valid_bars",
-    }
+    # 有数字格式的列右对齐，其余（代码、名称、板块、形态…）左对齐
+    right_align = set(fmts) | {"valid_bars", "rule_count"}
 
     lines = ["  ".join(_pad(headers[i], widths[i]) for i in range(len(columns)))]
     lines.append("  ".join("-" * widths[i] for i in range(len(columns))))
@@ -181,7 +175,28 @@ def print_console(result: ScanResult, cfg, max_rows: Optional[int] = None) -> st
     return text
 
 
-def write_files(result: ScanResult, cfg) -> List[Path]:
+def print_frame(
+    result,
+    columns: Sequence[str],
+    labels: Dict[str, str],
+    float_formats: Optional[Dict[str, str]] = None,
+    summary: str = "",
+    max_rows: Optional[int] = None,
+) -> str:
+    """终端打印任意结果表（用于指标信号报告）。"""
+    table = render_table(
+        result.hits,
+        columns=columns,
+        max_rows=max_rows,
+        float_formats=float_formats,
+        labels=labels,
+    )
+    text = f"{summary}\n\n{table}" if summary else table
+    print(text)
+    return text
+
+
+def write_files(result, cfg, prefix: str = "volscan", sheet_name: str = "放量命中") -> List[Path]:
     """按配置写出报告文件，返回写出的路径列表。"""
     formats = [str(f).lower() for f in (cfg.get("report.formats") or [])]
     formats = [f for f in formats if f != "console"]
@@ -193,12 +208,12 @@ def write_files(result: ScanResult, cfg) -> List[Path]:
     written: List[Path] = []
 
     if "csv" in formats:
-        path = reports_dir / f"volscan_{stamp}.csv"
+        path = reports_dir / f"{prefix}_{stamp}.csv"
         result.hits.to_csv(path, index=False, encoding="utf-8-sig")
         written.append(path)
 
     if "xlsx" in formats:
-        path = reports_dir / f"volscan_{stamp}.xlsx"
+        path = reports_dir / f"{prefix}_{stamp}.xlsx"
         meta = pd.DataFrame(
             [
                 {
@@ -209,12 +224,12 @@ def write_files(result: ScanResult, cfg) -> List[Path]:
             ]
         )
         with pd.ExcelWriter(path, engine="openpyxl") as writer:
-            result.hits.to_excel(writer, sheet_name="放量命中", index=False)
+            result.hits.to_excel(writer, sheet_name=sheet_name, index=False)
             meta.to_excel(writer, sheet_name="参数与统计", index=False)
         written.append(path)
 
     if "json" in formats:
-        path = reports_dir / f"volscan_{stamp}.json"
+        path = reports_dir / f"{prefix}_{stamp}.json"
         payload = {
             "trade_date": result.trade_date,
             "stats": result.stats,

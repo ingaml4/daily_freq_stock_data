@@ -10,6 +10,12 @@ logs/
 config.local.yaml
 *.local.yaml
 
+# 本地密钥（GitHub token、麦蕊 licence、SMTP 密码等）——永不提交
+.env
+.env.*
+*.secret
+secrets/
+
 .venv/
 venv/
 .idea/

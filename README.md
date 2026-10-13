@@ -1,56 +1,210 @@
-# A股日频放量扫描（emscan）
+# A股日频放量扫描 + 指标信号（emscan）
 
-盘后用东方财富免费接口落日线行情，每天 17:00 全市场扫一遍，把"突然放量"的票挑出来，
-输出终端表格 + CSV/XLSX 报告（可选推送到飞书/企业微信/钉钉/邮件）。
+盘后用**麦蕊智数**接口落日线行情，每个交易日收盘后（东八区 15:32 / 17:15，可改）全市场扫一遍：
 
-## 现状
+* **放量扫描**：把"突然放量"的票挑出来（量比 + 稳健 Z 分数 + 成交额/换手率门槛）；
+* **指标信号**：把"刚进金叉""刚踩布林下轨"的票挑出来（MACD/KDJ/BOLL/MA）；
 
-已经写好并验证过的部分：
+四个主信号：**突然放量 / MACD 金叉 / KDJ 金叉 / BOLL 下轨突破**，每天按"股票 × 交易日"落一行宽表缓存
+（行情 + 指标 + 0/1 标记），`python3 -m emscan hits` 秒查，不用重算也不用重新抓数。
 
-* 数据落库（SQLite 单文件）、增量更新、缺口自动回补、非交易日自动跳过
-* 放量算法（量比 5/10/20/60 + 稳健 Z 分数 + 成交额/换手率/历史长度门槛 + ST/停牌剔除）
-* 报告输出、可选推送、cron / k8s 部署脚本、接口字段文档
-* 32 个单元/集成测试全绿（`python3 -m pytest tests`），以及不联网也能跑的端到端合成数据自检
-  （`python3 -m emscan demo`：注入 11 只真实放量 → 11 只全命中，ST/新股/停牌/小成交额样本
-  全部按预期剔除，零误报）
+输出终端表格 + CSV/XLSX（可选被 webhook/邮件推送）。**服务器上只需要配一个 licence**，
+数据缺口由脚本自己判断、自己补。
 
-**需要你在能上网的机器上跑一次** `python3 -m emscan check --probe`：本机的执行沙箱出不了网，
-所以两个东财接口的真实响应我没能亲自验证（解析逻辑是按接口文档 + 固定报文单测写的）。
-`--probe` 会打印真实样本，正常情况下你会看到"快照接口 OK / 日K线接口 OK"。
-
-## 快速开始
+## 30 秒上手
 
 ```bash
 cd /home/jumpsrv/daily-freq-stock-data
 
-# 0) 亲眼验证接口（需要能上外网；这一步同时确认字段没变）
-python3 -m emscan check --probe
+export MAIRUI_LICENCE=你的证书              # 到 https://www.mairui.club 免费领取
+python3 -m emscan check --probe             # 第 1 步：验证证书/接口/字段（几秒钟）
+python3 -m emscan run --limit 50            # 第 2 步：小规模试跑（约 2 分钟）
+python3 -m emscan run                       # 第 3 步：全量（首次见下方"耗时"表）
 
-# 1) 首次：回补全市场历史日K线（约 5400 只，几分钟；先用 --limit 100 试也行）
-python3 -m emscan init
-python3 -m emscan backfill --limit 100     # 试点
-python3 -m emscan backfill                 # 全量
-
-# 2) 平日每天跑这一条（增量更新 + 扫描 + 报告）
-python3 -m emscan run
-
-# 3) 挂到 cron：每交易日 17:00
-bash scripts/daily_scan.sh                 # 先手动试跑一遍
-crontab -e                                 # 粘贴 scripts/crontab.example 里的行
+bash scripts/daily_scan.sh                  # 以后每天由 cron 跑这一条
 ```
+
+第一次跑之前只需要填 licence（写进 `config.yaml` 的 `mairui.licence`，或设环境变量
+`MAIRUI_LICENCE`）。库在哪、回补多少天、抓哪些指标、什么时候跳过，全部自动判断。
 
 ## 命令一览
 
 | 命令 | 作用 |
 | --- | --- |
-| `python3 -m emscan init` | 初始化行情库 |
-| `python3 -m emscan universe` | 只刷新股票列表（不抓历史） |
-| `python3 -m emscan backfill [--limit N] [--start YYYY-MM-DD]` | 回补历史日K线 |
-| `python3 -m emscan update [--force]` | 增量更新当天行情 + 缺口回补 |
-| `python3 -m emscan scan [--trade-date YYYY-MM-DD]` | 用本地数据扫描（可回看历史某天） |
-| `python3 -m emscan run` | 每天 17:00 的入口：update + scan + 报告 + 推送 |
-| `python3 -m emscan demo [--symbols N] [--days N]` | 合成行情自检，不联网跑通全链路 |
-| `python3 -m emscan check [--probe]` | 自检配置/行情库；`--probe` 联网验证接口 |
+| `python3 -m emscan run` | **每天跑这一条**：自愈同步 + 放量扫描 + 指标信号 + 报告（+ 推送） |
+| `python3 -m emscan check [--probe]` | 自检配置/行情库/指标；`--probe` 联网验证证书与字段 |
+| `python3 -m emscan sync [--limit N]` | 只补数据（列表+流通股本+日线+当日行情+指标），不出报告 |
+| `python3 -m emscan update` | 只更新当日行情 + 补近期日线缺口 |
+| `python3 -m emscan backfill` | 回补日线：新股全历史 + 老股票缺口续传 |
+| `python3 -m emscan indicators [--kinds macd,kdj,boll]` | 补齐日频技术指标 |
+| `python3 -m emscan scan [--trade-date YYYY-MM-DD]` | 用本地数据做放量扫描（可回看历史某天） |
+| `python3 -m emscan signals [--rules ...] [--trade-date ...]` | 用本地数据筛指标信号 |
+| `python3 -m emscan hits [--date ...] [--secid ...] [--only ...]` | **查每日信号缓存**（四个主信号，不联网、秒回） |
+| `python3 -m emscan web [--host ...] [--port ...] [--token ...]` | **起网页端**：四个查询按钮 + 可排序表格（代码跳雪球） |
+| `python3 -m emscan demo` | 无网络自检：合成行情跑通"落库→扫描→报告" |
+| `python3 -m emscan init` | 只初始化行情库 |
+
+常用开关：`--limit N`（本次最多处理 N 只）、`--days N`（自愈窗口）、`--force`（快照日期不是今天也落库）、
+`--skip-indicators`、`--skip-signals`。`--config 路径` 是全局参数，要写在子命令**前面**。
+
+## 数据表粒度：一行到底是什么
+
+一共 4 张业务表，粒度和用途都不一样（`data/market.sqlite`，`sqlite3` 直接就能查）：
+
+| 表 | 一行 = | 字段 | 谁写 |
+| --- | --- | --- | --- |
+| `symbols` | 一只股票 | `secid, code, name, market, board, is_st, float_shares(流通股本), listed_date, updated_at` | 股票列表 + 快照/基础信息 |
+| `bars` | **一只股票 × 一个交易日**（日线行情） | `secid, date, open, high, low, close, volume(手), amount(元), amplitude(%), pct_chg(%), chg(元), turnover(%), float_mv, volume_ratio, source` | 当日快照 / 历史回补 |
+| `indicators` | **一只股票 × 一个交易日**（技术指标原始值） | `secid, date, macd_diff/macd_dea/macd_bar, kdj_k/kdj_d/kdj_j, boll_upper/boll_mid/boll_lower, ma5/ma10/ma20/ma60, source` | 麦蕊指标接口 |
+| `daily_signals` | **一只股票 × 一个交易日（宽表：行情 + 放量 + 指标 + 信号标记）** | 见下 | `scan` 写放量那几列，`signals` 写指标与标记那几列 |
+
+`daily_signals` 一行 41 列，就是"当天这只票的全部结论"：
+
+```
+secid, date,
+close, pct_chg, volume, amount, turnover                       -- 行情
+vol_ratio_5/10/20/60, vol_z60, spot_volume_ratio, vol_signal, vol_score   -- 放量指标
+macd_diff, macd_dea, macd_bar, kdj_k, kdj_d, kdj_j,
+boll_upper, boll_mid, boll_lower, boll_pos, ma5, ma10, ma20, ma60        -- 技术指标数值
+s_vol_spike, s_macd_golden, s_kdj_golden, s_boll_break_lower,            -- ① 四个主信号（1/0）
+s_macd_dead, s_kdj_dead, s_ma_golden, s_ma_dead,
+s_boll_lower, s_boll_upper, s_boll_break_upper,                          -- 其余常用信号（顺手都算了）
+computed_at
+```
+
+另外有张视图 `daily_signals_named`，把 0/1 标记拼成 `signals` 文本列（如
+`vol_spike,macd_golden`），方便任何 SQL 客户端/看板直接读。
+
+## 四个主信号：怎么算、什么时候算、能不能缓存
+
+| # | 主信号 | 判定 | 数据来源 |
+| --- | --- | --- | --- |
+| 1 | 突然放量 | 量比5 ≥ 2.0 且（量比20 ≥ 1.5 或 vol_z60 ≥ 3.0），且成交额 ≥ 5000 万、换手率 ≥ 0.5%、≥ 25 根K线 | 本地 `bars` 纯计算 |
+| 2 | MACD 金叉 | 当日 DIFF 上穿 DEA（昨天 DIFF ≤ DEA） | `indicators`（麦蕊 MACD） |
+| 3 | KDJ 金叉 | 当日 K 上穿 D | `indicators`（麦蕊 KDJ） |
+| 4 | BOLL 下轨突破 | 当日收盘 ≤ 布林下轨（`boll_break_lower`；想用"最低价触及下轨"就把规则换成 `boll_lower`） | `indicators`（麦蕊 BOLL） |
+
+**是每次运行都重算吗？**
+
+* 原始数据（`bars`/`indicators`）**不会重复抓**：每天只补"缺的那一天"（用交易日历比对），
+  历史上已经拿到的日期不会二次请求，也不会重算；
+* 信号本身是**本地计算**（不联网、毫秒级/秒级），每次 `scan`/`signals` 会把结果**落进 `daily_signals`**；
+  `hits` 命令、以后做手机端/看板都**直接读缓存**，不再重算；
+* 两个写入者（放量、指标）各写自己那几列，`COALESCE` 合并到同一行，重复跑完全幂等 ——
+  所以你可以放心把 `run` 挂两次（见下面"什么时候跑"）。
+
+日常查询（都不联网）：
+
+```bash
+python3 -m emscan hits                                  # 最近一个交易日：四个主信号任一命中
+python3 -m emscan hits --only macd_golden,kdj_golden     # 当天"同时"金叉的票
+python3 -m emscan hits --min-signals 3                   # 至少命中 3 个信号
+python3 -m emscan hits --secid 600519 --days 30          # 茅台最近 30 天每天的信号
+python3 -m emscan hits --date 2026-10-09 --out /tmp/h.csv
+```
+
+也可以直接用 SQL（例：某天同时放量 + MACD 金叉）：
+
+```sql
+SELECT secid, date, signals, vol_ratio_5, macd_diff, macd_dea
+FROM daily_signals_named
+WHERE date = '2026-10-13' AND s_vol_spike = 1 AND s_macd_golden = 1
+ORDER BY vol_ratio_5 DESC;
+```
+
+## 网页端（四个按钮 + 可排序表格）
+
+```bash
+python3 -m emscan web                          # 打开 http://127.0.0.1:8080/（默认只本机）
+python3 -m emscan web --host 0.0.0.0 --token 我的口令    # 对外暴露：务必带 token 或用反向代理
+```
+
+页面就一件事：把缓存里的信号按天摊开看。结构：
+
+```
+┌ 导航： 放量 │ MACD金叉 │ KDJ金叉 │ 布林下轨 ┐   ← 点击切换查询（URL 是 /signals/<视图>）
+│ 工具条：日期下拉 + 代码/名称搜索               │
+│ 表格  ：代码(→雪球) 名称 板块 收盘价 涨跌幅%    │   ← 表头点击排序
+│        成交额(亿) 换手率% 量比5 量比20 Z60 …   │
+└ 提示  ：交易日 / 命中只数 / 当前排序 / 搜索词   ┘
+```
+
+* **表头可点击排序**：每列都能点（涨跌幅、成交额、量比、Z 分数、布林位置…），
+  点一次切换升降序；默认排序按视图给：放量/金叉按**成交额降序**，布林下轨按**布林位置升序**
+  （越贴/越跌破下轨越靠前）。排序既走服务器（`?sort=pct_chg&order=asc`，无 JS 也能用），
+  也带了一段内置 JS 做**本地即时排序**（不重新请求）。
+* **股票代码就是超链接**，直接跳雪球日线行情：`0.000933 → https://www.xueqiu.com/S/SZ000933`、
+  `1.601058 → SH601058`、`0.300442 → SZ300442`（京市 `BJ` 也对）。
+* **手机适配**：窄屏（≤760px）自动把表格换成**卡片**（一只票一张卡，字段名在上、值在下），
+  不用左右拖；导航是横向滚动的胶囊按钮，手指直接点。涨跌用红/绿着色。
+* **JSON 接口**：`/api/signals?view=macd_golden&limit=200`，返回同样的数据结构，
+  以后做小程序 / 微信 / 大屏看板直接复用；`/healthz` 给探活用。
+* 日期下拉可以看到**历史任意一天**的信号（只要那天跑过 `run`）；搜索框按代码或名称过滤。
+
+### 部署与安全
+
+* 默认只监听 `127.0.0.1`（本机）。要手机上访问，两种做法：
+  1. **反代出去**（推荐）：`nginx`/`Caddy` 加 TLS + Basic Auth，转发到 `127.0.0.1:8080`；
+  2. 临时直连：`--host 0.0.0.0 --token 随机串`，访问时带 `?token=随机串`
+     （不给 token 就 401）。注意 http 是明文的，公网务必上 TLS。
+* systemd 常驻：`deploy/systemd/emscan-web.service`（`EMSCAN_WEB_HOST/PORT/TOKEN` 走 `EnvironmentFile`）。
+* 只读 SQLite（WAL），所以**页面和 `run` 可以同时跑**，不会互相阻塞。
+
+### 性能：为什么用标准库 `http.server` 就够了
+
+在 5400 只股票 × 5 天（2.7 万行）的缓存库上实测（单机、135 行/页、含移动端卡片渲染）：
+
+| 场景 | 耗时 / 吞吐 |
+| --- | --- |
+| 单页渲染（冷，含查询+排序+渲染） | **7.5 ms** |
+| 单页渲染（暖，命中页面缓存） | **~0.2 ms** |
+| 单线程吞吐 | **≈130 req/s** |
+| 4 / 8 / 16 并发 | 93 / 137 / 131 req/s，p95 = 39 / 80 / 126 ms |
+| gzip（手机流量） | 220 KB → **19 KB**（+1.6 ms CPU） |
+| `/api/signals` JSON | 6 ms（100 KB） |
+
+结论与取舍：
+
+1. **够用**：每天只有几十到几百次页面查看（一个人或小团队、手机为主），
+   `ThreadingHTTPServer` + 长连接 + gzip 完全撑得住，还少两个依赖、少一个进程管理器。
+2. **瓶颈不在 HTTP 层**：这 7.5 ms 里 ~2 ms 是 SQLite 查询、~5 ms 是 HTML 拼接；
+   测出来的 GIL 平台期（≈130 req/s）说明是 **CPU 密集的 Python**，不是网络。
+   换成 Flask（WSGI，线程模型类似）不会更快；换 FastAPI/uvicorn（async）也只在你**有 I/O 等待**
+   （调用外部 API、WebSocket、SSE）时才明显受益 —— 而本服务是"读本地 SQLite + 拼字符串"。
+3. **什么时候该换**：并发用户到几十个以上、要在同一进程里做认证/会话/上传、
+   或者要把这套查询开放成给多个系统调的 API 平台。那时把 `build_context()` / `render_html()`
+   直接挂到 FastAPI 路由上即可（数据层与传输层是分开的，改动约 30 行），
+   也可以先不动代码、直接起 2~4 个 `emscan web` 实例用 nginx 做 upstream（无状态只读，天然可横向扩）。
+
+## 每天 `run` 到底做了什么
+
+`run` 是幂等的：脚本自己比对"应该有什么"和"本地有什么"，只补缺的。
+
+```
+① 股票列表      /hslt/list                  → symbols（新上市自动进来，ST/退市自动标记）
+② 流通股本      快照里的流通市值 ÷ 价格      → symbols.float_shares（历史换手率靠它推算）
+③ 当日行情      全市场快照 → 当日 bars       → 停牌不落库；非交易日/数据未更新直接跳过
+④ 日线缺口      交易日历 vs 本地 bars        → 缺哪天就从哪天补；没抓过的股票拉全历史
+⑤ 指标缺口      交易日历 vs 本地 indicators  → MACD/KDJ/BOLL 各自单独比对、单独补
+⑥ 放量扫描      scan.py（纯本地计算）        → volscan_<交易日>.csv/xlsx + 写 daily_signals
+⑦ 指标信号      signals.py（纯本地计算）     → signals_<交易日>.csv/xlsx + 写 daily_signals
+```
+
+（③ 排在 ④ 前面是故意的：先用收盘快照把"今天"落库，再比对缺口，就不会为了补今天
+给全市场各发一次 K 线请求。）
+
+几个"自己判断"的例子：
+
+* 机器刚装好、库里一条数据都没有 → 步骤 ③ 会给全市场拉全历史（而不是报错）；
+* 某天抓取失败、某只票被漏掉 → 下次 `run` 比对交易日历发现缺口，自动补；
+* 周末/节假日/数据还没更新（快照日期≠今天）→ 记一条日志直接退出，**不落库、不扫描**，退出码 0（不会惊动 cron）；
+* 盘前跑（价格/成交量全是 0）→ 同样跳过，不会写出 0 价 0 量的脏 K 线；
+* 证书限频低、一次跑不完 → 用 `--limit` / `sync.max_symbols_per_run` 分多次跑，剩下的下次接着补。
+* 长期停牌/退市的票在窗口内永远凑不齐日期 → 每次 `run` 会为它们各发 1 次请求（数量有限、可控），
+  换来的是"数据一恢复就自动补上"，不需要人工干预。
+
+所有写入都是 `INSERT OR REPLACE`（`bars`/`indicators` 主键都是 `(secid, date)`），
+**同一天重复跑多少遍结果都一样**，不会写坏历史。cron 脚本另外加了文件锁，避免上一轮没跑完被重复拉起。
 
 ## 放量怎么判
 
@@ -62,109 +216,275 @@ vol_z60 = (log(今日量) - 中位数(log 基准期量)) / (1.4826 × MAD)
 ```
 
 * 基准期里的停牌日（成交量 = 0）不算数，否则会把量比人为放大（复牌当天能虚高到 6~10 倍）。
-* 窗口内有效交易日不足 2 天时该窗口作废（`scan.min_valid_in_window`）；这样"停牌几天后
-  复牌放量"能被识别，同时避免用 1 天数据当基准。
-* 稳健 Z 分数用中位数 + MAD，对厚尾/异常值不敏感，用来兜住"20 日均值被前期巨量抬高"的情况。
+* 窗口内有效交易日不足 2 天时该窗口作废（`scan.min_valid_in_window`）。
+* 稳健 Z 分数用中位数 + MAD，对厚尾/异常值不敏感。
 
-命中规则（可在 `config.yaml` 调）：
+命中规则（`config.yaml` / `emscan/config.py` 可调）：
 
 ```
 量比5 >= 2.0  且  (量比20 >= 1.5  或  vol_z60 >= 3.0)
-且 成交额 >= 5000 万 元
+且 成交额 >= 5000 万元
 且 换手率 >= 0.5%
 ```
 
 命中后按涨跌幅分形态：`放量上攻`（≥+3%）、`放量下跌`（≤-3%）、`放量滞涨`（|涨跌|<1%）、
-`放量震荡`（其余），并给一个综合分排序（量比为主，兼顾成交额、换手率、统计显著性）。
+`放量震荡`（其余），并给一个综合分排序。
+
+## 指标信号怎么筛
+
+`signals` 在本地指标表上做规则匹配（默认"命中任一"）：
+
+| 规则名 | 含义 | 需要落库的指标 |
+| --- | --- | --- |
+| `macd_golden` | MACD 金叉：DIFF 上穿 DEA | macd |
+| `macd_dead` | MACD 死叉：DIFF 下穿 DEA | macd |
+| `kdj_golden` | KDJ 金叉：K 上穿 D | kdj |
+| `kdj_dead` | KDJ 死叉：K 下穿 D | kdj |
+| `ma_golden` / `ma_dead` | MA5 上穿/下穿 MA10 | ma |
+| `boll_lower` | 触及布林下轨（当日最低价 ≤ 下轨） | boll |
+| `boll_break_lower` | 收在布林下轨之下（收盘 ≤ 下轨） | boll |
+| `boll_upper` / `boll_break_upper` | 触及/收在布林上轨之上 | boll |
+
+默认规则：`macd_golden, kdj_golden, boll_lower`（就是"金叉 + 布林下轨"）。
+报告里带 `signals`（规则英文名，方便程序过滤）、`signals_cn`（中文）、`rule_count`（命中几条），
+以及 `boll_pos`（布林位置：0=贴下轨、1=贴上轨、<0=跌破下轨），按"命中规则数 → 布林位置 → 成交额"排序。
+
+```bash
+python3 -m emscan signals                                   # 默认规则，出 signals_<交易日>.csv/xlsx
+python3 -m emscan signals --rules macd_golden,boll_lower     # 换规则
+python3 -m emscan signals --trade-date 2026-10-09            # 回看某天
+```
 
 ## 输出长什么样
 
 ```
 A股日频放量扫描 | 交易日 2026-10-12
-全市场 200 只 / 参与扫描 179 只 / 命中 11 只
+全市场 5202 只 / 参与扫描 4830 只 / 命中 11 只
 命中规则: 量比5 >= 2.0 且 (量比20 >= 1.5 或 Z >= 3.0)；成交额 >= 50000000.0 元，换手率 >= 0.5%，至少 25 根K线
 
 代码    名称     板块    收盘价  涨跌幅%  换手率%  vol_ratio_5  vol_ratio_20  vol_ratio_60  vol_z60  成交额(亿)  形态      评分
 ------  -------  ------  ------  -------  -------  -----------  ------------  ------------  -------  ----------  --------  -----
 600005  测试005  沪主板   89.94    +5.60    80.74         9.47         10.23         10.33      9.3      386.69  放量上攻  19.49
-...
 ```
 
-文件输出（默认）：`data/reports/volscan_<交易日>.csv`（utf-8-sig，Excel 直接打开）和同名 `.xlsx`
-（含"放量命中"和"参数与统计"两个 sheet）；在 `report.formats` 里加 `json` 还会输出 JSON。
+```
+A股日频指标信号 | 交易日 2026-10-12
+参与筛选 4830 只 / 命中 37 只
+信号规则：MACD金叉 + KDJ金叉 + 触及下轨（任一满足）；上一个交易日 2026-10-09
 
-## 每天 17:00 是怎么跑的
+代码    名称    板块    收盘价  涨跌幅%  ...  命中信号                     信号数  布林位置  布林下轨  DIFF    K     D     J
+------  ------  ------  ------  -------  ...  ---------------------------  ------  --------  --------  ------  ----  ----  ----
+600001  金叉股  沪主板   10.00    +0.00  ...  MACD金叉、KDJ金叉、触及下轨    3.00      0.00     10.00  -0.050  45.0  38.0  59.0
+```
 
-1. **拉全市场快照**（约 54 个请求）→ 拿到股票列表 + 当日成交量/额/换手率。
-2. **判断今天是不是交易日**：用快照里的行情时间戳 `f124`；如果日期不是今天（周末/节假日/
-   数据没更新），记一条运行日志后**直接退出，不落库不扫描**，退出码 0（不会给 cron 报警）。
-3. **落当日行情**：停牌（成交量 0）的票不写当日 K 线。
-4. **缺口回补**：把"本地最后一条行情早于上一个交易日"的股票挑出来，用日K线接口从断点补齐
-   （比如某天抓取失败、或某只票被漏掉）。同一交易日内补过的票记在 `heal_log` 表里，
-   不会反复抓停牌股。上限 500 只/次，剩下留到下次。
-5. **扫描 + 出报告 + 推送**，并把本次运行记进 `runs` 表（含命中数、阈值）。
+文件输出（默认写在 `data/reports/`）：`volscan_<交易日>.csv|.xlsx`、`signals_<交易日>.csv|.xlsx`
+（CSV 为 utf-8-sig，Excel 双击即开；xlsx 带"参数与统计"sheet）。在 `report.formats` 里加 `json` 还会输出 JSON。
 
-因为 `bars` 表主键是 `(secid, date)` 且全部写入都是 `INSERT OR REPLACE`，**同一天重复跑多少遍
-结果都一样**，不会写坏历史。cron 脚本还加了 `flock`，避免上一轮没跑完被重复拉起。
+## 配置
 
-## 配置（config.yaml）
+`config.yaml` 默认只有一项必填：
 
-最常调的几个：
+```yaml
+mairui:
+  licence: ""      # 或 export MAIRUI_LICENCE=...
+```
+
+其余全部有默认值，需要时再在 `config.yaml` 里覆盖（默认值与完整注释在 `emscan/config.py` 的 `DEFAULTS`）。
+最常调的几项：
 
 | 配置项 | 默认 | 说明 |
 | --- | --- | --- |
-| `universe.boards` | 沪深主板 + 创业板 + 科创板 | 想加北交所就填上 `bse` |
-| `universe.exclude_st` | `true` | 剔除 ST / *ST / 退市整理 |
-| `universe.min_bars` | `25` | 过滤新股/次新 |
-| `scan.min_amount` | `50000000` | 成交额门槛（元），防小票噪声 |
-| `scan.min_turnover` | `0.5` | 换手率门槛（%） |
-| `scan.vol_ratio_5_min` / `vol_ratio_20_min` / `z_min` | `2.0` / `1.5` / `3.0` | 命中阈值 |
-| `scan.top_n` | `50` | 报告条数上限 |
-| `eastmoney.workers` | `8` | 并发抓取线程数，被限流就调小 |
-| `notify.enabled` | `false` | 打开后推 webhook/邮件（邮件密码走环境变量，不写配置文件） |
+| `mairui.licence` | `""` | 证书；也可用环境变量 `MAIRUI_LICENCE`（推荐） |
+| `mairui.rate_limit_per_min` | `300` | 证书限频：基础 300 / 包月 1000 / 包年 3000 / 钻石 6000 |
+| `mairui.workers` | `8` | 并发线程数（不突破上面的限频，只影响"挤满配额"的速度） |
+| `mairui.spot_mode` | `auto` | 快照取数：`all`→`more`→`single` 逐级降级 |
+| `mairui.kline_adjust` | `f` | 前复权（`n` 不复权 / `b` 后复权 / `fr`/`br` 等比） |
+| `reconcile_calendar_days` | `45` | 自愈比对窗口：往前多少自然日找缺口 |
+| `sync.max_symbols_per_run` | `0` | 单次最多处理多少只（0=不限），限频低时用它分多次跑 |
+| `indicators.kinds` | `[macd, kdj, boll]` | 每天抓哪些指标（可选 `ma`）；请求数 = 股票数 × 种类 |
+| `indicators.limit` | `10` | 首次抓指标只取最近 N 条（够判断金叉即可） |
+| `signals.rules` | `[macd_golden, kdj_golden, boll_lower]` | 信号规则；`signals.match` 可选 `any`/`all` |
+| `universe.boards` | 沪深主板+创业板+科创板 | 想加北交所需要另配（见下） |
+| `scan.*` | 见上文 | 放量判定阈值（量比、Z、成交额、换手率…） |
+| `notify.enabled` | `false` | 打开后把放量命中推到 webhook（飞书/企微/钉钉/Slack）或邮件 |
+
+## 数据源与证书（麦蕊智数）
+
+字段清单、真实报文、踩坑记录见 **[docs/mairui_api.md](docs/mairui_api.md)**；客户端在
+[emscan/mairui.py](emscan/mairui.py)（解析函数可单测，不联网也能回归）。
+
+1. **领证书**：<https://www.mairui.club> 免费领取，形如 `LICENCE-XXXX-XXXX-XXXX-XXXX`。
+   放到 `mairui.licence` 或环境变量 `MAIRUI_LICENCE`（**别提交进 git**）。
+2. **出网放行**：允许访问 `api.mairuiapi.com`（443/HTTPS）。国内机器直连即可，不需要公网 IP。
+3. **有企业代理时**（requests 会自动读这两个变量；本机沙箱里代理曾导致偶发 `ProxyError`，
+   所以建议把接口域名放进直连名单）：
+
+   ```bash
+   export https_proxy=http://10.0.70.30:9997
+   export no_proxy=localhost,127.0.0.1,api.mairuiapi.com,api.mairui.club
+   ```
+4. **按下限节流**：`mairui.rate_limit_per_min` 填自己证书的档位，客户端用全局最小间隔节流，
+   不会超频；单个请求失败会自动重试（指数退避），单只失败不影响整批。
+5. **验证**：`python3 -m emscan check --probe` 会依次打印 股票列表 / 快照 / 日线 / 3 个指标 /
+   交易日历 的真实样本——第一次部署先跑它，比看文档快。
+
+### 请求量与耗时（决定选哪档证书）
+
+指标接口是"一只股票一种指标一次请求"，所以规模大概是 **股票数 × 指标种类**：
+
+| 阶段 | 请求数 | 300 次/分 | 1000 次/分 | 3000 次/分 |
+| --- | --- | --- | --- | --- |
+| 首次：股票列表 + 当日快照 | 2 | 秒级 | 秒级 | 秒级 |
+| 首次：日线全历史（≈5400 只） | ≈5400 | ≈18 分钟 | ≈5.4 分钟 | ≈1.8 分钟 |
+| 首次：MACD/KDJ/BOLL | ≈16200 | ≈54 分钟 | ≈16 分钟 | ≈5.4 分钟 |
+| 每日 `run`（指标 3×5400 + 少量日线缺口） | ≈16200 | ≈54 分钟 | ≈16 分钟 | ≈5.4 分钟 |
+
+想更快：只开需要的指标（`indicators.kinds: [macd, kdj]` 就省掉 1/3）；
+或用 `sync.max_symbols_per_run: 1500` 把一次跑拆成多次（脚本自动续传，缺口不会漏）。
+
+**北交所**：`universe.boards` 加 `bse` 也不会自动生效——沪深股票列表接口不含北交所，
+需要另一份接口（文档里"京市A股数据"）。默认不开。
+
+## 时区（重要）
+
+接口时间、交易日、报告日期全部按**东八区**算，代码里统一走 `emscan/tzutil.py`
+（`Asia/Shanghai`），进程启动时还会把 `TZ` 固定成东八区。
+
+如果服务器是 UTC 容器而没设时区，北京时间 0:00~8:00 之间"今天"会算成昨天，
+进而导致交易日判断、缺口窗口、报告文件名全部错位——本项目不会踩这个坑，
+但你自己写的 cron / k8s `schedule` 也记得按东八区设置（见下）。
+
+## 什么时间跑（15:30 可以吗？）
+
+可以，但要理解数据什么时候才"齐"：
+
+| 数据 | 麦蕊的更新时间 | 说明 |
+| --- | --- | --- |
+| 当日快照（收盘价/量/额/换手） | 收盘后即定格（最后一条约 15:29~15:30） | 15:30 就能拿到当天完整的日线行情 |
+| 历史分时交易（日线） | 15:30 开始更新，预计 17:10 完成 | 补历史缺口用；当天行情我们走快照，不依赖它 |
+| 日频技术指标（MACD/KDJ/BOLL/MA） | 每个交易日 15:35 更新 | **15:30 时当天指标还没有** |
+
+所以推荐**跑两次**（都是幂等的，第二次会把第一次缺的补上）：
+
+```cron
+CRON_TZ=Asia/Shanghai
+32 15 * * 1-5  /path/to/scripts/daily_scan.sh   # ① 收盘后：当日行情 + 放量扫描（最快看到"突然放量"）
+15 17 * * 1-5  /path/to/scripts/daily_scan.sh   # ② 完整：补当天指标 + 金叉/布林信号 + 缓存落库
+```
+
+* 15:32 那次会自动**跳过当天指标**（`indicators.publish_time: "15:35"`），不会白跑 3×股票数 次请求；
+* 只想跑一次也行，把时间放在 **17:15** 之后（那时行情和指标都齐了），或就留 15:32 ——
+  当天指标会在第二天的运行里自动补上（自愈）；
+* systemd：`deploy/systemd/emscan-daily.timer` 里两行 `OnCalendar=`（改时间只改这里）；
+  k8s：`deploy/k8s-cronjob.yaml` 里有两个 CronJob（15:32 与 17:15），改 `schedule` 即可；
+* 想临时补跑/确认：`bash scripts/daily_scan.sh` 或 `python3 -m emscan sync`；
+  非交易日会自己跳过，日志里会写清"交易日历：今天不是交易日"。
+
+## 部署
+
+三种方式任选，都是跑 `python3 -m emscan run`：
+
+```bash
+# ① 宿主机 cron（最简单）
+crontab -e        # 粘贴 scripts/crontab.example 里的两行
+bash scripts/daily_scan.sh        # 先手动试跑：增量更新 + 扫描 + 报告 + 推送
+
+# ② systemd timer（服务器上更稳，带失败重启与日志归集）
+sudo cp deploy/systemd/*.service deploy/systemd/*.timer /etc/systemd/system/
+sudo systemctl enable --now emscan-daily.timer
+
+# ③ k8s CronJob（跑在已有集群上，零新增服务器）
+kubectl apply -f deploy/k8s-cronjob.yaml      # 注意先把 licence 放进 Secret
+```
+
+容器里通过环境变量注入证书（`Dockerfile` 已设 `TZ=Asia/Shanghai`）：
+
+```bash
+docker build -t emscan:0.1 .
+docker run --rm -e MAIRUI_LICENCE=$MAIRUI_LICENCE \
+  -v /srv/emscan/data:/data -e EMSCAN_STORE_PATH=/data/market.sqlite emscan:0.1 run
+```
+
+### 资源占用与选机器
+
+| 阶段 | 请求数（300 次/分） | 内存峰值 | 说明 |
+| --- | --- | --- | --- |
+| 首次全量回补 | ≈22000 | ≈300 MB | 日线+指标都靠网络，瓶颈是限频 |
+| 每天 `run` | ≈16200 | ≈600 MB | 扫描读回 140 自然日；信号读回 30 日行情+指标 |
+| 行情库 | — | — | 5400 只 × 3 年 ≈ 400 万行 ≈ 0.7 GB；加指标 ≈ +0.4 GB |
+
+结论：
+
+* **1 vCPU / 1 GB 内存 / 20 GB 盘**能跑（指标表只留最近窗口的话更省；把
+  `scan.lookback_calendar_days` 调到 120 可再降一点内存）。想宽松就 **2 vCPU / 2 GB**。
+* 内存占用只取决于"最近多少天 × 股票数"，与历史总长度无关。
+* **真正的时间成本是限频**：300 次/分档位下，每天跑完要 ~55 分钟，把它放在 17:00 之后、
+  第二天开盘之前都行；要更快就得升证书档位（或减少指标种类）。
+* 最省钱：当 k8s CronJob 跑在已有集群上，或挂到任意一台常开 Linux 机器的 cron。
 
 ## 目录结构与数据模型
 
 ```
 emscan/
-  eastmoney.py   东财接口客户端（快照 + 日K线，解析函数可单测）
-  store.py       SQLite 仓库：symbols / bars / trading_days / runs / heal_log
-  scan.py        放量算法（纯计算，不联网）
-  report.py      终端表格 + CSV/XLSX/JSON（中文字符按 2 宽度对齐）
-  notify.py      webhook（飞书/企微/钉钉/Slack）+ 邮件，失败不影响主流程
-  demo.py        合成行情生成器（构造各类边界样本）
-  cli.py         命令行入口
-scripts/         daily_scan.sh（cron 用）、crontab.example
-deploy/          k8s CronJob + PVC 清单（可选）
-docs/            东财接口字段与踩坑记录
-tests/           32 个测试
+  mairui.py     麦蕊智数接口客户端（6 类接口，解析函数可单测）
+  pipeline.py   自愈同步：按交易日历比缺口，逐项补齐（列表/日线/当日行情/指标）
+  store.py      SQLite 仓库：symbols / bars / indicators / trading_days / runs
+  scan.py       放量算法（纯计算，不联网）
+  signals.py    指标信号筛选（金叉/死叉/布林轨/均线，纯计算）
+  report.py     终端表格 + CSV/XLSX/JSON（中文按 2 宽度对齐）
+  notify.py     webhook（飞书/企微/钉钉/Slack）+ 邮件
+  tzutil.py     东八区时间（所有"今天/现在"的唯一入口）
+  demo.py       合成行情生成器（构造各类边界样本）
+  cli.py        命令行入口
+scripts/         daily_scan.sh（cron 用）、crontab.example、push_to_github.sh
+deploy/          k8s CronJob + PVC、systemd service/timer
+docs/            docs/mairui_api.md（接口字段与踩坑记录）
+tests/           74 个单元/集成测试
 data/            market.sqlite + reports/（已 gitignore）
 logs/            emscan.log + cron.log（已 gitignore）
 ```
 
-`bars` 表一行 = 一只票一个交易日：
-`secid, date, open, high, low, close, volume(手), amount(元), amplitude, pct_chg, chg,
-turnover(%), float_mv, volume_ratio, source`。
-`source` 区分数据来源：`spot`（当日快照）/ `kline`（历史回补）/ `demo`（合成）。
+表结构：
 
-数据量参考：5400 只 × 1000 个交易日 ≈ 540 万行，SQLite 文件几百 MB，扫描时只读最近
-约 250 个自然日（十几万行），秒级完成。
+* `symbols`：`secid, code, name, market, board, is_st, float_shares, listed_date, updated_at`
+* `bars`：一行 = 一只票一个交易日；`secid, date, open, high, low, close, volume(手), amount(元),
+  amplitude, pct_chg, chg, turnover(%), float_mv, volume_ratio, source`
+  （`source`：`spot` 当日快照 / `kline` 历史回补 / `demo` 合成）
+* `indicators`：一行 = 一只票一个交易日；`macd_diff/macd_dea/macd_bar`、`kdj_k/kdj_d/kdj_j`、
+  `boll_upper/boll_mid/boll_lower`、`ma5/ma10/ma20/ma60`（四种指标分次写入，互不覆盖）
+* `trading_days`：由 bars 去重得到；`runs`：每次运行的账本（模式、股票数、命中数、参数、note）
 
 ## 排错
 
 | 现象 | 处理 |
 | --- | --- |
-| `backfill` 大量失败/超时 | 调小 `eastmoney.workers`（如 4），调大 `timeout`/`retries` |
-| 某天 17:00 没出报告，日志写"非交易日或数据未更新" | 正常：当天不是交易日，或东财数据还没更新；确认后可用 `--force` 手动补 |
-| 报告里某只票数据明显不对 | 先 `python3 -m emscan check --probe` 确认接口字段没变 |
-| 想把历史某天重算一遍 | `python3 -m emscan scan --trade-date 2026-10-09` |
-| 想看看库里什么状态 | `python3 -m emscan check`（股票数/行数/日期区间/文件大小） |
+| 报错提到 `licence` / 请求超时 | 先跑 `check --probe`：确认证书有效、能访问 `api.mairuiapi.com`、代理是否把域名挡住了 |
+| `run` 大量卡在指标阶段 | 那一步就是 3×股票数次请求：按证书档位调 `mairui.rate_limit_per_min`，或减少 `indicators.kinds`，或用 `--limit` 分批 |
+| 某天没出报告，日志写"非交易日或数据未更新" | 正常：当天休市，或数据还没更新（日志会带交易日历判断）；确认后可用 `--force` 手动补 |
+| `scan` 报"本地没有 XXX 的行情" | 那天确实没有数据（休市/未更新）：先 `run`，或 `scan --trade-date` 指定有数据的交易日 |
+| 历史日线的换手率是空 | 缺流通股本：打开 `mairui.fetch_instrument: true` 补一次，或等下一次 `update` 从快照反推 |
+| 想知道库里什么状态 | `python3 -m emscan check`（股票数/日线/指标/日期区间/文件大小） |
+| 想离线验证逻辑没坏 | `python3 -m emscan demo`（合成行情，11 只注入放量应全命中，ST/新股/停牌/小成交额全剔除） |
+| 想看某天/某只票的信号 | `python3 -m emscan hits --date ...` / `--secid 600519 --days 30`（读缓存，不联网） |
+| 单元测试跑得慢（几十秒） | 本地磁盘 `fsync` 慢：`EMSCAN_SQLITE_SYNC=OFF python3 -m pytest tests`（行情库随时可重建，测试里已默认关同步写） |
+
+## 开发与测试
+
+```bash
+python3 -m pytest tests -q          # 74 个测试：报文解析 / 自愈同步 / 信号 / 缓存 / 网页端 / 报告
+python3 -m pytest tests -q -k hits  # 只跑"每日信号缓存 + hits 查询"
+python3 -m pytest tests/test_web.py -q   # 只跑网页端（导航/排序/雪球链接/HTTP/口令）
+```
+
+测试会在 `/tmp` 下建几十个临时 SQLite 库。共享盘/容器里 `fsync` 可能要 1 秒以上
+（表现为"测试像卡住了"），`tests/conftest.py` 已经默认设 `EMSCAN_SQLITE_SYNC=OFF` 让测试快一个数量级；
+生产环境不设这个变量（默认 `NORMAL`，保证断电不丢最后几条写入）。
 
 ## 后续可以加的东西
 
+* 消息推送升级：把 `signals` 结果也推到手机（webhook 已可用），或做企业微信/自建 Web 的交互查询
 * 缩量扫描（把判定反过来：量比 ≤ 0.5 的地量股），代码里只需加一个 `mode`
-* 连续放量天数、放量后 N 日表现跟踪（数据已经在库里，取数即可）
-* 板块/行业共振统计（按 `board` 已经有了，行业需要再抓一次行业分类）
-* 涨停梯队、龙虎榜/资金流向叠加
-* 接 Airflow / DolphinScheduler 定时，或把结果写入 MySQL/ClickHouse 供看板使用
-* 把 `scan.py` 的输入换成任意因子表，就能复用这套"全市场日频扫描 + 报告"的骨架
+* 连续放量天数、放量后 N 日表现跟踪、金叉后胜率统计（数据已在库里，取数即可）
+* 板块/行业共振统计（按 `board` 已有；行业需要再抓一次分类）
+* 涨停梯队、龙虎榜/资金流向叠加（麦蕊有对应接口）
+* 把 `scan.py` / `signals.py` 的输入换成任意因子表，复用这套"全市场日频扫描 + 报告"的骨架

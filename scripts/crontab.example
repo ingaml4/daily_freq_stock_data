@@ -1,11 +1,24 @@
-# 安装：  crontab -e  然后粘贴下面两行（按需改路径）
+# 安装：crontab -e 然后粘贴下面几行（按需改路径）
 #
-# 本机时区已经是 Asia/Shanghai，cron 的 17:00 就是北京时间；
-# 如果部署到 UTC 机器上，请像下面这样显式指定 CRON_TZ（Debian/cronie 均支持）。
+# 本机时区已经是 Asia/Shanghai 时，cron 的 17:00 就是北京时间；
+# 如果机器是 UTC，务必显式指定 CRON_TZ（Debian/cronie 均支持），
+# 否则会变成北京时间凌晨 01:00 才跑。脚本内部也固定按东八区算"今天"。
 CRON_TZ=Asia/Shanghai
 
-# 交易日 17:00 —— 全市场放量扫描。非交易日脚本会自己跳过（快照日期 != 今天）。
-0 17 * * 1-5 /home/jumpsrv/daily-freq-stock-data/scripts/daily_scan.sh
+# 交易日 15:32 —— 收盘后第一次跑：落当日行情 + 放量扫描（这时的收盘价/成交量已经定格）。
+# 麦蕊的"当日技术指标"是 15:35 才更新的，所以这一次会自动跳过指标（见 indicators.publish_time），
+# 不会白耗请求；指标缺口由下面 17:15 那次补。
+32 15 * * 1-5 /home/jumpsrv/daily-freq-stock-data/scripts/daily_scan.sh
+
+# 交易日 17:15 —— 完整跑一次：补齐当天指标 + 出"金叉/布林下轨"信号报告 + 缓存落库。
+# 非交易日脚本会自己跳过（快照日期 != 今天，且交易日历会给出明确日志），退出码 0。
+15 17 * * 1-5 /home/jumpsrv/daily-freq-stock-data/scripts/daily_scan.sh
+
+# 只想每天跑一次？把它改成 17:15 那一行即可（15:32 那行删掉）：
+#   15 17 * * 1-5 /home/jumpsrv/daily-freq-stock-data/scripts/daily_scan.sh
+
+# 可选：周末低峰期把"指标缺口"单独补一轮（限频低的证书很好用：慢跑不占用白天窗口）
+0 3 * * 6 MAIRUI_LICENCE_FILE=/etc/emscan/emscan.env /usr/bin/python3 -m emscan sync --days 90 >>/home/jumpsrv/daily-freq-stock-data/logs/cron.log 2>&1
 
 # 可选：每周六凌晨备份一次行情库（SQLite 单文件，直接 cp 即可）
 30 2 * * 6 cp /home/jumpsrv/daily-freq-stock-data/data/market.sqlite /home/jumpsrv/backup/market_$(date +\%Y\%m\%d).sqlite

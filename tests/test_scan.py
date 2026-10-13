@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 from helpers import bar, flat_history, make_cfg, symbols_frame, trading_dates
 
-from emscan.scan import SIGNAL_DOWN, SIGNAL_FLAT, SIGNAL_UP, scan
+from emscan.scan import SCAN_COLUMNS, SIGNAL_DOWN, SIGNAL_FLAT, SIGNAL_UP, scan
 
 BASE = 1_000_000.0  # 基准成交量（手）
 DATES = trading_dates(80, end="2026-10-09")
@@ -254,3 +254,12 @@ def test_non_excel_symbol_without_metadata(tmp_path):
     assert len(result.hits) > 0
     assert set(result.hits["code"]).issuperset({"600001"})
     assert np.isfinite(result.hits["score"]).all()
+
+
+def test_scan_works_on_slim_column_projection(tmp_path):
+    """扫描路径只读 SCAN_COLUMNS（无 open/high/low/source）时结果不变。"""
+    cfg = make_cfg(tmp_path)
+    frame, symbols = build_market()
+    full = scan(frame, symbols, cfg, trade_date=TRADE_DATE).hits
+    slim = scan(frame[list(SCAN_COLUMNS)], symbols, cfg, trade_date=TRADE_DATE).hits
+    pd.testing.assert_frame_equal(full.reset_index(drop=True), slim.reset_index(drop=True))

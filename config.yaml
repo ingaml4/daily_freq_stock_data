@@ -1,77 +1,72 @@
 # ============================================================================
-# A股日频放量扫描 —— 配置文件
-# 所有路径默认相对于本文件所在目录；可用 --config 指定其它配置文件。
+# emscan 配置：服务器上**只需要填这一个 licence**，其余全部有默认值。
+#
+# 不想把证书写进文件，就用环境变量（推荐，容器/CI 里也方便）：
+#     export MAIRUI_LICENCE=XXXX-XXXX-XXXX-XXXX-XXXX
+# 容器里还可以覆盖行情库位置：
+#     export EMSCAN_STORE_PATH=/data/market.sqlite
+#
+# 所有可调项的完整清单与含义见 README 的"配置"一节（默认值在 emscan/config.py）。
 # ============================================================================
 
-store:
-  # 行情落库位置（SQLite，单文件，方便备份/迁移）
-  path: data/market.sqlite
-  # 报告输出目录
-  reports_dir: data/reports
-  # 日志目录
-  logs_dir: logs
+mairui:
+  # 麦蕊智数证书：https://www.mairui.club 免费领取（按证书档位限频）
+  licence: ""
 
-eastmoney:
-  # 并发抓取线程数。东财免费接口比较宽松，8~16 比较稳妥；被封限流就调小。
-  workers: 8
-  timeout: 15.0
-  retries: 3
-  # 每次请求后的随机等待上界（秒），用于限速
-  sleep: 0.05
-  # 1=前复权（推荐，避免除权日价格断层影响涨跌幅） 0=不复权
-  kline_fqt: 1
-  # 行情列表分页大小
-  spot_page_size: 100
+  # ↓↓↓ 下面这些按需再改，不改也能跑 ↓↓↓
 
-universe:
-  # 参与扫描的板块：sh_main 沪主板 / sh_star 科创板 / sz_main 深主板 / sz_gem 创业板 / bse 北交所
-  boards: [sh_main, sh_star, sz_main, sz_gem]
-  # 剔除 ST / *ST / 退市整理股
-  exclude_st: true
-  # 当日停牌（成交量为 0）不参与扫描
-  exclude_suspended_today: true
-  # 至少要有这么多根历史K线才参与扫描（过滤新股/次新，默认 25 个交易日）
-  min_bars: 25
+  # 证书限频（次/分钟）：基础 300 / 包月·体验 1000 / 包年 3000 / 钻石 6000。
+  # 填对了才能把"全市场 + 技术指标"的回补时间算准（脚本按下限节流，不会超频）。
+  # rate_limit_per_min: 300
+  # 并发线程数：默认 8，只影响同一分钟内的"挤出速度"，不会突破上面的限频
+  # workers: 8
+  # 当日快照取数方式：auto=全市场→多股→逐只 逐级降级，也可强制 all/more/single
+  # spot_mode: auto
+  # 日线除权方式：f=前复权（默认） n=不复权 b=后复权 fr/br=等比前/后复权
+  # kline_adjust: f
+  # 没有流通股本时，是否逐只抓《股票基础信息》补 fv（首次全市场会多花十几分钟）
+  # fetch_instrument: false
 
-scan:
-  # 量比窗口（今日成交量 / 之前 N 个有效交易日平均成交量）
-  windows: [5, 10, 20, 60]
-  # 稳健 Z 分数的基准窗口（对 log 成交量取中位数 + MAD）
-  baseline_window: 60
-  # 最低成交额（元），过滤掉没流动性的一字板小票噪声，默认 5000 万
-  min_amount: 50000000
-  # 最低换手率（%）
-  min_turnover: 0.5
-  # 命中规则：vol_ratio_5 >= 2.0 且 (vol_ratio_20 >= 1.5 或 vol_z60 >= 3.0)
-  vol_ratio_5_min: 2.0
-  vol_ratio_20_min: 1.5
-  z_min: 3.0
-  # 每个量比窗口内至少要有几个"有效交易日"（非停牌）才计算量比。默认 2：
-  # 停牌几天后复牌放量的票也能被识别；调到 3 则更保守（复牌急涨容易被忽略）。
-  min_valid_in_window: 2
-  # 报告输出条数上限（按 score 排序）
-  top_n: 50
+# 自愈比对窗口：往前看多少自然日来找"缺了哪天"（45 ≈ 30 个交易日）
+# reconcile_calendar_days: 45
 
-report:
-  formats: [console, csv, xlsx]
-  title: A股日频放量扫描
+# 单次运行最多处理多少只股票（0=不限）。证书限频低时设成 800，多次运行自动收敛。
+# sync:
+#   max_symbols_per_run: 0
 
-notify:
-  # 默认关闭。打开后 run 命令会把命中结果推到 webhook / 邮箱。
-  enabled: false
-  webhook:
-    # type: feishu（飞书机器人）/ wecom（企业微信）/ dingtalk（钉钉）/ slack
-    type: feishu
-    url: ""
-  email:
-    enabled: false
-    host: ""
-    port: 465
-    ssl: true
-    user: ""
-    # 密码从环境变量读取，不要写进配置文件
-    password_env: EMSCAN_SMTP_PASSWORD
-    sender: ""
-    recipients: []
-  # 推送里最多带多少条明细
-  max_items: 20
+# 每天抓哪些日频指标（每次请求只拿一种指标的一只股票，所以请求数=股票数×种类）
+# indicators:
+#   enabled: true
+#   kinds: [macd, kdj, boll]   # 可选 ma
+#   limit: 10                  # 日更只取最近 10 条，够判断金叉
+#   publish_time: "15:35"      # 当日指标发布时间，早于它运行就跳过当天（省请求）
+
+# 指标信号筛选（金叉 / 布林下轨 …）
+# signals:
+#   enabled: true
+#   match: any                 # any=命中任一（默认） all=必须同时满足
+#   rules: [macd_golden, kdj_golden, boll_break_lower]
+# 四个"主信号"（跑完 run 后可用 `python3 -m emscan hits` 直接查）：
+#   突然放量        = scan 的命中规则（量比5≥2 且 (量比20≥1.5 或 Z60≥3)，成交额/换手率门槛）
+#   MACD金叉        = macd_golden
+#   KDJ金叉         = kdj_golden
+#   BOLL下轨突破    = boll_break_lower（收盘 ≤ 布林下轨；想用"最低价触及下轨"就换成 boll_lower）
+# 备选规则：
+#   macd_golden MACD金叉  macd_dead MACD死叉
+#   kdj_golden  KDJ金叉   kdj_dead  KDJ死叉
+#   ma_golden   MA5上穿MA10（需要 indicators.kinds 含 ma）
+#   boll_lower  触及布林下轨   boll_break_lower 收在下轨之下
+#   boll_upper  触及布林上轨   boll_break_upper 收在上轨之上
+
+# 推送（默认关闭；webhook 支持飞书/企业微信/钉钉/Slack，或邮件）
+# notify:
+#   enabled: false
+#   webhook: {type: feishu, url: ""}
+
+# 网页端：python3 -m emscan web（四个查询按钮 + 可排序表格 + 代码跳雪球）
+# web:
+#   host: 127.0.0.1     # 只本机；对外暴露改成 0.0.0.0 并设置 token / 用反向代理加认证
+#   port: 8080
+#   title: A股日频信号
+#   limit: 300          # 单页最多显示多少行
+#   token: ""           # 非空则访问要带 ?token=xxx

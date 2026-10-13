@@ -1,0 +1,18 @@
+[Unit]
+Description=每个交易日 17:05 触发 emscan（脚本自己判断是否交易日，休市直接退出）
+
+[Timer]
+# 周一~周五跑两次（北京时间，systemd 用下面的时区解释）：
+#   15:32 —— 收盘后第一次：落当日行情 + 放量扫描（收盘价/量已定格）
+#   17:15 —— 完整一次：补当天技术指标（15:35 才发布）+ 出金叉/布林信号报告
+# 只想跑一次就删掉 15:32 那行（保留 17:15）。
+OnCalendar=Mon..Fri 15:32
+OnCalendar=Mon..Fri 17:15
+Timezone=Asia/Shanghai
+# 机器临时关机/重启错过触发时，尽快补跑一次
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target
