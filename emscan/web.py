@@ -595,7 +595,7 @@ background:#3a2a12;border:1px solid #7a5a1e}
 .toolbar .refresh{padding:6px 10px;border:1px solid var(--line);border-radius:8px;
 background:var(--card);color:var(--fg);font-size:13px}
 table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
-thead th{position:sticky;top:var(--sticky-top,0px);z-index:4;background:var(--card);
+thead th{position:sticky;top:0;z-index:4;background:var(--card);
 text-align:right;white-space:nowrap;padding:8px;border-bottom:1px solid var(--line);
 font-size:12px;color:var(--muted)}
 thead th::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;
@@ -609,7 +609,7 @@ tbody td.left{text-align:left}
 tr:hover td{background:#1b1f28}
 .pos{color:var(--up)}
 .neg{color:var(--down)}
-.wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.wrap{overflow:auto;-webkit-overflow-scrolling:touch;max-height:min(72vh,760px)}
 table td:first-child,table th:first-child{position:sticky;left:0;z-index:2;background:var(--card)}
 table td:nth-child(2),table th:nth-child(2){position:sticky;
 left:var(--col1-w,66px);z-index:2;background:var(--card)}
@@ -650,11 +650,12 @@ JS = """\
 // ① 表头吸顶 + 冻结列宽度：最靠前执行、不依赖后面的逻辑（后面出错也照样生效）
 (function () {
   function syncOffsets() {
-    var head = document.querySelector('header');
-    var root = document.documentElement;
-    if (head) root.style.setProperty('--sticky-top', head.offsetHeight + 'px');
     var cell = document.querySelector('table tbody td:first-child');
-    if (cell) root.style.setProperty('--col1-w', cell.getBoundingClientRect().width + 'px');
+    if (cell) {
+      document.documentElement.style.setProperty(
+        '--col1-w', cell.getBoundingClientRect().width + 'px'
+      );
+    }
   }
   syncOffsets();
   window.addEventListener('load', syncOffsets);
@@ -821,12 +822,12 @@ JS = """\
   });
 
   if (table) {
-    window.addEventListener('scroll', function () {
-      var offset = parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue('--sticky-top')
-      ) || 0;
-      table.classList.toggle('stuck', table.getBoundingClientRect().top < offset);
-    }, {passive: true});
+    var box = table.closest('.wrap');
+    if (box) {
+      box.addEventListener('scroll', function () {
+        table.classList.toggle('stuck', box.scrollTop > 4);
+      }, {passive: true});
+    }
   }
   // 点下拉外面自动收起
   document.addEventListener('click', function (ev) {

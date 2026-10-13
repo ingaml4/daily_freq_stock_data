@@ -579,10 +579,11 @@ def test_table_has_pagination_controls(tmp_path):
     assert 'type="checkbox"' in page and ", checked>" in page.replace(" checked>", ", checked>")
     assert "emscan_boards" in page  # 选项记在 localStorage
     # 表头吸顶 + 冻结列：偏移都由 JS 实测写入 CSS 变量（别再写死像素）
-    assert "top:var(--sticky-top,0px)" in page
+    # 表格自带滚动容器（横向+纵向），表头 sticky 相对它 top:0 才是对的
+    assert "overflow:auto" in page and "max-height:min(72vh,760px)" in page
+    assert "thead th{position:sticky;top:0" in page
     assert "left:var(--col1-w,66px)" in page.replace("\n", "")
-    assert "setProperty('--sticky-top'" in page and "setProperty('--col1-w'" in page
-    assert page.index("syncOffsets") < page.index("applyPage")  # 吸顶逻辑最靠前执行
+    assert "'--col1-w'" in page and "getBoundingClientRect" in page
     # 手机端不再有卡片，全端统一表格（行数 == 数据条数）
     assert page.count('data-sid="') == len(ctx.rows)
     assert 'class="cards"' not in page
