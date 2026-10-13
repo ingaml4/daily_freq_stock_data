@@ -507,15 +507,30 @@ JS = """\
   }
   function markState(table, link, key, order) {
     var nextOrder = order === 'asc' ? 'desc' : 'asc';
+    var label = '';
     table.querySelectorAll('th a[data-sort]').forEach(function (other) {
       other.classList.toggle('active', other === link);
       var arrow = other.textContent.replace(/[\\u2191\\u2193\\u2195]\\s*$/, '').trim();
+      if (other === link) label = arrow;
       other.textContent = arrow + ' ' + (other === link ? ARROW[order] : '\\u2195');
       var want = other === link ? nextOrder : 'asc';
       other.dataset.order = want;
       other.href = other.href.replace(/([?&])sort=[^&]*/, '$1sort=' + key)
                              .replace(/([?&])order=[^&]*/, '$1order=' + want);
     });
+    // 提示行 + 地址栏一起跟上，别让它们停在上次服务端渲染的状态
+    var hint = document.getElementById('sortState');
+    if (hint) {
+      hint.textContent = label + ' ' + (order === 'asc' ? '升序' : '降序');
+      hint.dataset.key = key;
+      hint.dataset.order = order;
+    }
+    if (window.history && history.replaceState && window.URLSearchParams) {
+      var params = new URLSearchParams(location.search);
+      params.set('sort', key);
+      params.set('order', order);
+      history.replaceState(null, '', location.pathname + '?' + params.toString());
+    }
     var form = document.querySelector('form.toolbar');
     if (form) {
       var s = form.querySelector('input[name=sort]');
@@ -633,7 +648,9 @@ def render_html(ctx: PageContext, title: str = "A股日频信号", show_logout: 
     sort_label = dict((key, label) for key, label, _, _ in COLUMNS).get(ctx.sort, ctx.sort)
     hint = (
         f"交易日 <b>{html.escape(ctx.date or '-')}</b> · 命中 <b>{ctx.total}</b> 只"
-        f"（显示前 {min(ctx.total, ctx.limit)} 只）· 排序：<b>{html.escape(sort_label)} {order_cn}</b>"
+        f"（显示前 {min(ctx.total, ctx.limit)} 只）· 排序："
+        f'<b id="sortState" data-key="{html.escape(ctx.sort)}" '
+        f'data-order="{html.escape(ctx.order)}">{html.escape(sort_label)} {order_cn}</b>'
     )
     if ctx.query:
         hint += f" · 搜索：<b>{html.escape(ctx.query)}</b>"
