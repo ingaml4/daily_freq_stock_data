@@ -556,7 +556,7 @@ CSS = """\
 body{margin:0;background:var(--bg);color:var(--fg);
 font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",Arial,sans-serif}
 a{color:var(--accent);text-decoration:none}
-header{position:sticky;top:0;z-index:5;background:rgba(15,17,21,.96);
+header{position:sticky;top:0;z-index:6;background:rgba(15,17,21,.96);
 border-bottom:1px solid var(--line);padding:10px 12px 8px}
 .brand{font-weight:700;font-size:16px;margin-bottom:8px}
 .brand span{color:var(--muted);font-weight:400;font-size:12px;margin-left:6px}
@@ -583,9 +583,12 @@ background:#3a2a12;border:1px solid #7a5a1e}
 .toolbar .refresh{padding:6px 10px;border:1px solid var(--line);border-radius:8px;
 background:var(--card);color:var(--fg);font-size:13px}
 table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
-thead th{position:sticky;top:0;background:var(--card);text-align:right;
-white-space:nowrap;padding:8px;border-bottom:1px solid var(--line);
+thead th{position:sticky;top:var(--sticky-top,0px);z-index:4;background:var(--card);
+text-align:right;white-space:nowrap;padding:8px;border-bottom:1px solid var(--line);
 font-size:12px;color:var(--muted)}
+thead th::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;
+background:var(--line)}
+table.stuck thead th{box-shadow:0 4px 8px -6px rgba(0,0,0,.85)}
 thead th.left{text-align:left}
 thead th a{color:var(--fg);cursor:pointer;user-select:none}
 thead th a.active{color:var(--accent);font-weight:700}
@@ -775,6 +778,24 @@ JS = """\
       try { applySort(match, parts[1] === 'desc' ? 'desc' : 'asc'); } catch (e) {}
     }
   }
+  // 表头吸顶：让 thead 贴在顶部工具条下面（工具条高度会随"是否换行"变化，动态量）
+  function syncStickyTop() {
+    var head = document.querySelector('header');
+    if (!head) return;
+    document.documentElement.style.setProperty('--sticky-top', head.offsetHeight + 'px');
+  }
+  syncStickyTop();
+  window.addEventListener('resize', syncStickyTop);
+  window.addEventListener('load', syncStickyTop);
+  if (table) {
+    window.addEventListener('scroll', function () {
+      var offset = parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--sticky-top')
+      ) || 0;
+      var stuck = table.getBoundingClientRect().top < offset;
+      table.classList.toggle('stuck', stuck);
+    }, {passive: true});
+  }
   applyPage();
 })();
 """
@@ -939,7 +960,6 @@ def render_html(
   <div class="hint">{hint}</div>
   {pager_block}
   {body}{empty}
-  {pager_block}
 </main>
 <footer>数据来自本地每日信号缓存（daily_signals）· 代码点击跳转雪球行情 · 表头可点击排序</footer>
 <script>{js_rendered}</script>

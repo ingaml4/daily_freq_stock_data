@@ -564,20 +564,18 @@ def test_box_view_is_a_first_class_button(tmp_path):
 
 
 def test_table_has_pagination_controls(tmp_path):
-    """分页：表上/卡片下各一条分页栏，每页 10/20/50/100 可选，默认页大小可配。"""
+    """分页：分页栏只在表格上方一条，每页 10/20/50/100 可选；表头吸顶。"""
     _, store, date = _seed(tmp_path)
     ctx = build_context(store, view="vol_spike", date=date)
     page = render_html(ctx, page_size=50)
-    # 两条分页栏（表格上方 / 卡片下方各一），四档每页行数
-    assert page.count('class="pager"') == 2
-    assert page.count('class="pg-size') >= 8  # 两栏 × 四档
+    assert page.count('class="pager"') == 1
+    assert page.count('data-size="') == 4  # 四个档位按钮（注意别把容器 class="pg-sizes" 算进来）
     for size in ("10", "20", "50", "100"):
         assert f'data-size="{size}"' in page
-    assert 'data-size="50" data-size' not in page
-    assert (
-        '" active" data-size="50"' in page.replace('class="pg-size active"', '" active"')
-        or "active" in page
-    )
+    assert "pg-size active" in page  # 当前档高亮
+    # 表头吸顶：CSS 用 --sticky-top，JS 量顶部工具条高度写进去
+    assert "top:var(--sticky-top,0px)" in page
+    assert "syncStickyTop" in page and "setProperty('--sticky-top'" in page
     # 分页要能对上表格行与移动端卡片（同一 sid）
     assert page.count('data-sid="') == 2 * len(ctx.rows)
     # JS 里的分页参数被替换成了真实值
