@@ -467,7 +467,7 @@ thead th{position:sticky;top:0;background:var(--card);text-align:right;
 white-space:nowrap;padding:8px;border-bottom:1px solid var(--line);
 font-size:12px;color:var(--muted)}
 thead th.left{text-align:left}
-thead th a{color:var(--fg)}
+thead th a{color:var(--fg);cursor:pointer;user-select:none}
 thead th a.active{color:var(--accent);font-weight:700}
 tbody td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
 tbody td.left{text-align:left}
@@ -487,9 +487,13 @@ footer{color:var(--muted);font-size:11px;padding:0 12px 24px}
 """
 
 JS = """\
-// 表头排序：能本地排就本地排（点一下立刻生效），排不动就按链接正常跳转（服务端排）。
+// 表头排序：纯前端（点一下立刻重排），**不改地址栏**。
+// 浏览器支持 localStorage 时记住上次排序列，刷新/切日期后自动套用。
 (function () {
   var ARROW = {asc: '\\u2191', desc: '\\u2193'};
+  var STORE_KEY = 'emscan_sort';
+  var REMEMBER = __REMEMBER_SORT__;
+
   function cellValue(row, index) {
     var cell = row.cells[index];
     if (!cell) return null;
@@ -500,36 +504,38 @@ JS = """\
   }
   function compare(a, b, dir) {
     if (a === null && b === null) return 0;
-    if (a === null) return 1;              // 空值永远排最后
+    if (a === null) return 1;                       // 空值永远排最后
     if (b === null) return -1;
     if (typeof a === 'number' && typeof b === 'number') return (a - b) * dir;
     return String(a).localeCompare(String(b), 'zh') * dir;
   }
+  function remember(key, order) {
+    if (!REMEMBER) return;
+    try { window.localStorage.setItem(STORE_KEY, key + ':' + order); } catch (e) {}
+  }
+  function recall() {
+    if (!REMEMBER) return null;
+    try {
+      var raw = window.localStorage.getItem(STORE_KEY);
+      if (!raw) return null;
+      var parts = raw.split(':');
+      if (parts.length !== 2) return null;
+      return {key: parts[0], order: parts[1] === 'desc' ? 'desc' : 'asc'};
+    } catch (e) { return null; }
+  }
   function markState(table, link, key, order) {
-    var nextOrder = order === 'asc' ? 'desc' : 'asc';
-    var label = '';
     table.querySelectorAll('th a[data-sort]').forEach(function (other) {
       other.classList.toggle('active', other === link);
-      var arrow = other.textContent.replace(/[\\u2191\\u2193\\u2195]\\s*$/, '').trim();
-      if (other === link) label = arrow;
-      other.textContent = arrow + ' ' + (other === link ? ARROW[order] : '\\u2195');
-      var want = other === link ? nextOrder : 'asc';
-      other.dataset.order = want;
-      other.href = other.href.replace(/([?&])sort=[^&]*/, '$1sort=' + key)
-                             .replace(/([?&])order=[^&]*/, '$1order=' + want);
+      var label = other.textContent.replace(/[\\u2191\\u2193\\u2195]\\s*$/, '').trim();
+      other.textContent = label + ' ' + (other === link ? ARROW[order] : '\\u2195');
+      other.dataset.order = (other === link) ? (order === 'asc' ? 'desc' : 'asc') : 'asc';
     });
-    // 提示行 + 地址栏一起跟上，别让它们停在上次服务端渲染的状态
     var hint = document.getElementById('sortState');
     if (hint) {
-      hint.textContent = label + ' ' + (order === 'asc' ? '升序' : '降序');
+      var label2 = link.textContent.replace(/[\\u2191\\u2193\\u2195]\\s*$/, '').trim();
+      hint.textContent = label2 + ' ' + (order === 'asc' ? '升序' : '降序');
       hint.dataset.key = key;
       hint.dataset.order = order;
-    }
-    if (window.history && history.replaceState && window.URLSearchParams) {
-      var params = new URLSearchParams(location.search);
-      params.set('sort', key);
-      params.set('order', order);
-      history.replaceState(null, '', location.pathname + '?' + params.toString());
     }
     var form = document.querySelector('form.toolbar');
     if (form) {
@@ -539,31 +545,42 @@ JS = """\
       if (o) o.value = order;
     }
   }
-  document.querySelectorAll('th a[data-sort]').forEach(function (link) {
-    link.addEventListener('click', function (ev) {
+  function applySort(table, link, order) {
+    var body = table.tBodies[0];
+    var rows = Array.prototype.slice.call(body.rows);
+    var dir = order === 'asc' ? 1 : -1;
+    var index = link.closest('th').cellIndex;
+    rows.sort(function (a, b) {
+      return compare(cellValue(a, index), cellValue(b, index), dir);
+    });
+    rows.forEach(function (row) { body.appendChild(row); });
+    markState(table, link, link.dataset.sort, order);
+    remember(link.dataset.sort, order);
+  }
+  var links = Array.prototype.slice.call(document.querySelectorAll('th a[data-sort]'));
+  links.forEach(function (link) {
+    link.addEventListener('click', function () {
       var table = link.closest('table');
-      var th = link.closest('th');
-      if (!table || !th || !table.tBodies[0]) return;   // 交给浏览器正常跳转
+      if (!table || !table.tBodies[0]) return;
+      var order = link.dataset.order === 'desc' ? 'desc' : 'asc';
       try {
-        var body = table.tBodies[0];
-        var rows = Array.prototype.slice.call(body.rows);
-        var key = link.dataset.sort;
-        var order = link.dataset.order === 'desc' ? 'desc' : 'asc';
-        var dir = order === 'asc' ? 1 : -1;
-        var index = th.cellIndex;
-        ev.preventDefault();
-        rows.sort(function (a, b) {
-          return compare(cellValue(a, index), cellValue(b, index), dir);
-        });
-        rows.forEach(function (row) { body.appendChild(row); });
-        markState(table, link, key, order);
+        applySort(table, link, order);
       } catch (err) {
-        // 本地排不了就走链接（服务端排），别把点击吞掉
-        if (window.console && console.warn) console.warn('本地排序失败，改用服务端排序', err);
-        window.location.href = link.href;
+        if (window.console && console.warn) console.warn('排序失败', err);
       }
     });
   });
+  // 打开页面时套用上次的排序（不改地址栏，只是重排一下表格）
+  var saved = recall();
+  if (saved) {
+    var link = links.filter(function (item) { return item.dataset.sort === saved.key; })[0];
+    if (link) {
+      var table = link.closest('table');
+      if (table && table.tBodies[0]) {
+        try { applySort(table, link, saved.order); } catch (e) {}
+      }
+    }
+  }
 })();
 """
 
@@ -590,14 +607,18 @@ def _cell_class(key: str, value: Any) -> str:
     return ""
 
 
-def render_html(ctx: PageContext, title: str = "A股日频信号", show_logout: bool = False) -> str:
+def render_html(
+    ctx: PageContext,
+    title: str = "A股日频信号",
+    show_logout: bool = False,
+    remember_sort: bool = True,
+) -> str:
     """把一页渲染成完整 HTML（服务端渲染，手机/桌面同一份）。"""
     nav = []
     for key, spec in VIEWS.items():
         active = ' class="active"' if key == ctx.view else ""
         nav.append(
-            f'<a{active} href="/signals/{key}?date={html.escape(ctx.date or "")}'
-            f'&sort={html.escape(ctx.sort)}&order={html.escape(ctx.order)}">'
+            f'<a{active} href="/signals/{key}?date={html.escape(ctx.date or "")}">'
             f'{html.escape(spec["nav"])}</a>'
         )
 
@@ -605,13 +626,13 @@ def render_html(ctx: PageContext, title: str = "A股日频信号", show_logout: 
     for key, label, _, sortable in COLUMNS:
         cls = "left" if key in ("code", "name", "board", "signals_cn") else ""
         if sortable:
+            # 排序纯前端：表头不带任何链接/参数（地址栏始终只有 view + date）
             nxt = "asc" if not (ctx.sort == key and ctx.order == "desc") else "desc"
             active = ' class="active"' if ctx.sort == key else ""
             arrow = ("↓" if ctx.order == "desc" else "↑") if ctx.sort == key else "↕"
             cell = (
                 f'<th class="{cls}"><a{active} data-sort="{key}" data-order="{nxt}" '
-                f'href="/signals/{ctx.view}?date={html.escape(ctx.date or "")}&sort={key}'
-                f'&order={nxt}">{html.escape(label)} {arrow}</a></th>'
+                f'role="button" tabindex="0">{html.escape(label)} {arrow}</a></th>'
             )
         else:
             cell = f'<th class="{cls}">{html.escape(label)}</th>'
@@ -676,6 +697,7 @@ def render_html(ctx: PageContext, title: str = "A股日频信号", show_logout: 
         )
     )
     empty = "" if ctx.error or ctx.rows else '<p class="hint">这一天没有命中该信号。</p>'
+    js_rendered = JS.replace("__REMEMBER_SORT__", "true" if remember_sort else "false")
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -689,8 +711,6 @@ def render_html(ctx: PageContext, title: str = "A股日频信号", show_logout: 
   <form class="toolbar" method="get" action="/signals/{ctx.view}">
     <label>日期 <select name="date" onchange="this.form.submit()">{dates}</select></label>
     <input name="q" value="{html.escape(ctx.query)}" placeholder="代码/名称" size="10">
-    <input type="hidden" name="sort" value="{html.escape(ctx.sort)}">
-    <input type="hidden" name="order" value="{html.escape(ctx.order)}">
     <button type="submit">查询</button>
   </form>
 </header>
@@ -699,7 +719,7 @@ def render_html(ctx: PageContext, title: str = "A股日频信号", show_logout: 
   {body}{empty}
 </main>
 <footer>数据来自本地每日信号缓存（daily_signals）· 代码点击跳转雪球行情 · 表头可点击排序</footer>
-<script>{JS}</script>
+<script>{js_rendered}</script>
 </body></html>
 """
 
@@ -715,6 +735,7 @@ def make_handler(
     limit: int = 300,
     password: str = "",
     session_days: int = DEFAULT_SESSION_DAYS,
+    remember_sort: bool = True,
 ) -> type:
     """生成一个 ``BaseHTTPRequestHandler`` 子类。
 
@@ -726,6 +747,9 @@ def make_handler(
     * ``/login`` ``/logout``         -> 口令登录 / 退出（Cookie 会话，默认 7 天）
     * ``/healthz``                   -> 探活（**不校验口令**，只回 ``ok``、不含任何数据，
       方便 nginx/k8s 的 healthCheck 直接打）
+
+    页面上的排序是纯前端的（点表头立刻重排，地址栏只有 ``view`` + ``date``）；
+    ``remember_sort`` 打开时用 localStorage 记住上次排序列。
 
     鉴权：设置了口令就要求登录（Cookie 会话），另外支持 HTTP Basic
     （``curl -u ":$口令"``）方便脚本/接口调用。口令为空则视为"开放访问"（只适合本机）。
@@ -878,7 +902,12 @@ def make_handler(
                 )
             else:
                 self._send(
-                    render_html(ctx, title=title, show_logout=bool(password)).encode("utf-8")
+                    render_html(
+                        ctx,
+                        title=title,
+                        show_logout=bool(password),
+                        remember_sort=remember_sort,
+                    ).encode("utf-8")
                 )
 
         def do_POST(self) -> None:  # noqa: N802 - http.server 的命名约定
@@ -924,11 +953,17 @@ def serve(
     limit: int = 300,
     password: str = "",
     session_days: int = DEFAULT_SESSION_DAYS,
+    remember_sort: bool = True,
     blocking: bool = True,
 ) -> ThreadingHTTPServer:
     """起一个网页服务，返回 server 对象（``blocking=False`` 时自己开线程，方便测试）。"""
     handler = make_handler(
-        store_factory, title=title, limit=limit, password=password, session_days=session_days
+        store_factory,
+        title=title,
+        limit=limit,
+        password=password,
+        session_days=session_days,
+        remember_sort=remember_sort,
     )
     httpd = ThreadingHTTPServer((host, int(port)), handler)
     log.info(

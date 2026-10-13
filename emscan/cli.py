@@ -931,6 +931,7 @@ def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
     title = str(cfg.get("web.title", "A股日频信号"))
     limit = int(getattr(args, "limit", None) or cfg.get("web.limit", 300) or 300)
     session_days = int(cfg.get("web.session_days", 7) or 7)
+    remember_sort = bool(cfg.get("web.remember_sort", True))
 
     store = open_store(cfg)
     if not store.latest_signal_date():
@@ -950,6 +951,7 @@ def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
             limit=limit,
             password=password,
             session_days=session_days,
+            remember_sort=remember_sort,
         )
     except OSError as exc:
         log.error("端口 %s 起不来（%s）：换一个 --port，或先关掉占用的进程", port, exc)

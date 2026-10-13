@@ -75,4 +75,6 @@ mairui:
 #   port: 8080
 #   title: A股日频信号
 #   limit: 300          # 单页最多显示多少行
-#   token: ""           # 非空则访问要带 ?token=xxx
+#   password: ""        # 访问口令（也可用 EMSCAN_WEB_PASSWORD；空=开放访问，只适合本机）
+#   session_days: 7     # 登录后 Cookie 记住几天
+#   remember_sort: true # 用浏览器本地存储记住上次排序列（排序本身是纯前端的，不进 URL）

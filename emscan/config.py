@@ -115,6 +115,8 @@ DEFAULTS: Dict[str, Any] = {
         "password": "",
         "password_env": "EMSCAN_WEB_PASSWORD",
         "session_days": 7,
+        # 排序是纯前端的（不进 URL）；这个开关控制"是否用浏览器本地存储记住上次排序列"
+        "remember_sort": True,
     },
     "notify": {
         "enabled": False,

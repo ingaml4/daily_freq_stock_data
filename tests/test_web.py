@@ -255,9 +255,11 @@ def test_render_html_has_nav_sortable_headers_and_xueqiu_links(tmp_path):
     assert 'class="active"' in page
     # 表头可点击排序：涨跌幅与成交额都在
     assert 'data-sort="pct_chg"' in page and 'data-sort="amount_yi"' in page
-    assert "sort=pct_chg" in page
-    # 排序状态会同步到提示行 + 地址栏（前端点表头后不再显示上一次服务端渲染的排序）
-    assert 'id="sortState"' in page and "URLSearchParams" in page and "replaceState" in page
+    # 排序纯前端：表头不带链接，页面里没有任何 sort=/order= 参数（地址栏只有 view + date）
+    assert not re.search(r"[?&](sort|order)=", page)
+    assert 'name="sort"' not in page and 'name="order"' not in page
+    # 排序状态只体现在提示行；用 localStorage 记住上次排序列
+    assert 'id="sortState"' in page and "emscan_sort" in page
     # 代码超链接跳雪球
     assert 'href="https://www.xueqiu.com/S/SZ000933"' in page
     # 涨跌染色 + 移动端卡片
