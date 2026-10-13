@@ -611,8 +611,8 @@ tr:hover td{background:#1b1f28}
 .neg{color:var(--down)}
 .wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
 table td:first-child,table th:first-child{position:sticky;left:0;z-index:2;background:var(--card)}
-table td:nth-child(2),table th:nth-child(2){position:sticky;left:66px;
-z-index:2;background:var(--card)}
+table td:nth-child(2),table th:nth-child(2){position:sticky;
+left:var(--col1-w,66px);z-index:2;background:var(--card)}
 thead th:first-child,thead th:nth-child(2){z-index:5}
 table td:first-child,table th:first-child{min-width:66px}
 .dd{position:relative}
@@ -641,14 +641,31 @@ color:#08121d;font-weight:700}
 @media (max-width:760px){
   body{font-size:13px}
   thead th,tbody td{padding:6px;font-size:12px}
-  table td:nth-child(2),table th:nth-child(2){left:60px}
-  table td:first-child,table th:first-child{min-width:60px}
+  table td:nth-child(2),table th:nth-child(2){left:var(--col1-w,60px)}
 }
 footer{color:var(--muted);font-size:11px;padding:0 12px 24px}
 """
 
 JS = """\
-// 表头排序 + 板块多选筛选 + 分页：全在前端（不刷新、地址栏不变），状态用 localStorage 记住。
+// ① 表头吸顶 + 冻结列宽度：最靠前执行、不依赖后面的逻辑（后面出错也照样生效）
+(function () {
+  function syncOffsets() {
+    var head = document.querySelector('header');
+    var root = document.documentElement;
+    if (head) root.style.setProperty('--sticky-top', head.offsetHeight + 'px');
+    var cell = document.querySelector('table tbody td:first-child');
+    if (cell) root.style.setProperty('--col1-w', cell.getBoundingClientRect().width + 'px');
+  }
+  syncOffsets();
+  window.addEventListener('load', syncOffsets);
+  window.addEventListener('resize', syncOffsets);
+  window.addEventListener('orientationchange', syncOffsets);
+  document.querySelectorAll('details.dd').forEach(function (dd) {
+    dd.addEventListener('toggle', syncOffsets);  // 下拉展开也可能改变工具条高度
+  });
+})();
+
+// ② 表头排序 + 板块多选筛选 + 分页：全在前端（不刷新、地址栏不变），状态用 localStorage 记住。
 (function () {
   var ARROW = {asc: '\\u2191', desc: '\\u2193'};
   var SORT_KEY = 'emscan_sort', SIZE_KEY = 'emscan_page_size', BOARD_KEY = 'emscan_boards';
@@ -803,13 +820,6 @@ JS = """\
     });
   });
 
-  function syncStickyTop() {
-    var head = document.querySelector('header');
-    if (head) document.documentElement.style.setProperty('--sticky-top', head.offsetHeight + 'px');
-  }
-  syncStickyTop();
-  window.addEventListener('resize', syncStickyTop);
-  window.addEventListener('load', syncStickyTop);
   if (table) {
     window.addEventListener('scroll', function () {
       var offset = parseFloat(

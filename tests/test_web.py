@@ -578,9 +578,11 @@ def test_table_has_pagination_controls(tmp_path):
     assert '<details class="dd">' in page and 'id="boardSummary"' in page
     assert 'type="checkbox"' in page and ", checked>" in page.replace(" checked>", ", checked>")
     assert "emscan_boards" in page  # 选项记在 localStorage
-    # 表头吸顶：CSS 用 --sticky-top，JS 量顶部工具条高度写进去
+    # 表头吸顶 + 冻结列：偏移都由 JS 实测写入 CSS 变量（别再写死像素）
     assert "top:var(--sticky-top,0px)" in page
-    assert "syncStickyTop" in page and "setProperty('--sticky-top'" in page
+    assert "left:var(--col1-w,66px)" in page.replace("\n", "")
+    assert "setProperty('--sticky-top'" in page and "setProperty('--col1-w'" in page
+    assert page.index("syncOffsets") < page.index("applyPage")  # 吸顶逻辑最靠前执行
     # 手机端不再有卡片，全端统一表格（行数 == 数据条数）
     assert page.count('data-sid="') == len(ctx.rows)
     assert 'class="cards"' not in page
