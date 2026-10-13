@@ -102,8 +102,26 @@ SORTABLE: Tuple[str, ...] = tuple(key for key, _, _, sortable in COLUMNS if sort
 
 MARKET_PREFIX = {1: "SH", 0: "SZ", 2: "BJ"}
 
-# 展示列 -> 缓存表里真正用来排序的字段（成交额展示单位是亿，表里存的是元）
+# 展示列 -> SQL 里真正用来排序的表达式。
+# 注意 code/name/board 来自 join 的 symbols 表（别名 s），其余在 daily_signals（别名 d）；
+# 成交额展示单位是"亿"，表里存的是"元"。
+# 板块按"显示出来的中文名"排（否则 sh_main/科创板/sz_gem 的顺序看起来是乱的）
+BOARD_SORT_SQL = (
+    "CASE s.board "
+    + " ".join(f"WHEN '{key}' THEN '{label}'" for key, label in BOARD_LABELS.items())
+    + " ELSE 'zz' END"
+)
+
+SYMBOL_SORT_COLUMNS = {"code": "s.code", "name": "s.name", "board": BOARD_SORT_SQL}
 SORT_COLUMN_SQL = {"amount_yi": "d.amount"}
+
+
+def sort_expression(key: str) -> str:
+    """把展示列名翻成 SQL 表达式（白名单之外的调用方已挡掉）。"""
+    if key in SYMBOL_SORT_COLUMNS:
+        return SYMBOL_SORT_COLUMNS[key]
+    return SORT_COLUMN_SQL.get(key, "d." + key)
+
 
 # 页面内容只取决于"缓存里有什么"，同一天里反复看同一页不必重算：
 # 键 = (数据版本, 查询参数)，数据一变（computed_at 变了）自动失效。
@@ -249,7 +267,7 @@ def build_context(
         store.conn.execute("SELECT COUNT(*) AS n " + source, params).fetchone()["n"] or 0
     )
     if ctx.total:
-        sort_sql = SORT_COLUMN_SQL.get(ctx.sort, "d." + ctx.sort)
+        sort_sql = sort_expression(ctx.sort)
         direction = "ASC" if ctx.order == "asc" else "DESC"
         rows = store.conn.execute(
             "SELECT d.*, s.code AS code, s.name AS name, s.board AS board "
@@ -469,33 +487,69 @@ footer{color:var(--muted);font-size:11px;padding:0 12px 24px}
 """
 
 JS = """\
-document.querySelectorAll('th a[data-sort]').forEach(function(link){
-  link.addEventListener('click',function(ev){
-    var table=link.closest('table');
-    if(!table||!table.tBodies[0])return;
-    ev.preventDefault();
-    var body=table.tBodies[0];
-    var rows=Array.prototype.slice.call(body.rows);
-    var index=link.closest('th').cellIndex;
-    var dir=(link.dataset.order==='asc')?1:-1;
-    function num(row){
-      var text=(row.cells[index]?row.cells[index].textContent:'').trim();
-      var value=parseFloat(text.replace(/[+%,]/g,''));
-      return isNaN(value)?null:value;
-    }
-    rows.sort(function(a,b){
-      var x=num(a),y=num(b);
-      if(x!==null&&y!==null)return (x-y)*dir;
-      var xs=(x===null?'':x),ys=(y===null?'':y);
-      if(typeof xs!=='number'||typeof ys!=='number'){
-        return String(xs).localeCompare(String(ys),'zh')*dir;
-      }
-      return 0;
+// 表头排序：能本地排就本地排（点一下立刻生效），排不动就按链接正常跳转（服务端排）。
+(function () {
+  var ARROW = {asc: '\\u2191', desc: '\\u2193'};
+  function cellValue(row, index) {
+    var cell = row.cells[index];
+    if (!cell) return null;
+    var text = cell.textContent.trim();
+    if (text === '' || text === '-') return null;
+    var num = parseFloat(text.replace(/[+%,]/g, ''));
+    return isNaN(num) ? text : num;
+  }
+  function compare(a, b, dir) {
+    if (a === null && b === null) return 0;
+    if (a === null) return 1;              // 空值永远排最后
+    if (b === null) return -1;
+    if (typeof a === 'number' && typeof b === 'number') return (a - b) * dir;
+    return String(a).localeCompare(String(b), 'zh') * dir;
+  }
+  function markState(table, link, key, order) {
+    var nextOrder = order === 'asc' ? 'desc' : 'asc';
+    table.querySelectorAll('th a[data-sort]').forEach(function (other) {
+      other.classList.toggle('active', other === link);
+      var arrow = other.textContent.replace(/[\\u2191\\u2193\\u2195]\\s*$/, '').trim();
+      other.textContent = arrow + ' ' + (other === link ? ARROW[order] : '\\u2195');
+      var want = other === link ? nextOrder : 'asc';
+      other.dataset.order = want;
+      other.href = other.href.replace(/([?&])sort=[^&]*/, '$1sort=' + key)
+                             .replace(/([?&])order=[^&]*/, '$1order=' + want);
     });
-    rows.forEach(function(row){body.appendChild(row)});
-    link.dataset.order=(link.dataset.order==='asc')?'desc':'asc';
+    var form = document.querySelector('form.toolbar');
+    if (form) {
+      var s = form.querySelector('input[name=sort]');
+      var o = form.querySelector('input[name=order]');
+      if (s) s.value = key;
+      if (o) o.value = order;
+    }
+  }
+  document.querySelectorAll('th a[data-sort]').forEach(function (link) {
+    link.addEventListener('click', function (ev) {
+      var table = link.closest('table');
+      var th = link.closest('th');
+      if (!table || !th || !table.tBodies[0]) return;   // 交给浏览器正常跳转
+      try {
+        var body = table.tBodies[0];
+        var rows = Array.prototype.slice.call(body.rows);
+        var key = link.dataset.sort;
+        var order = link.dataset.order === 'desc' ? 'desc' : 'asc';
+        var dir = order === 'asc' ? 1 : -1;
+        var index = th.cellIndex;
+        ev.preventDefault();
+        rows.sort(function (a, b) {
+          return compare(cellValue(a, index), cellValue(b, index), dir);
+        });
+        rows.forEach(function (row) { body.appendChild(row); });
+        markState(table, link, key, order);
+      } catch (err) {
+        // 本地排不了就走链接（服务端排），别把点击吞掉
+        if (window.console && console.warn) console.warn('本地排序失败，改用服务端排序', err);
+        window.location.href = link.href;
+      }
+    });
   });
-});
+})();
 """
 
 

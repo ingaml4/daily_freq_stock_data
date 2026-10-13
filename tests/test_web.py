@@ -3,6 +3,7 @@
 import base64
 import http.cookiejar
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -393,6 +394,66 @@ def test_healthz_needs_no_login(tmp_path):
             f"http://127.0.0.1:{httpd.server_port}/healthz", timeout=10
         ) as r:
             assert r.read() == b"ok"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_every_sortable_column_sorts_server_side(tmp_path):
+    """回归：每一列表头点下去都必须 200 且顺序正确。
+
+    （曾经的 bug：code/name/board 来自 join 出来的 symbols 表，SQL 却写成 ``d.code``，
+    于是点"代码/名称/板块"直接 500；板块还应该按中文名排序。）
+    """
+    _, store, date = _seed(tmp_path)
+    store.close()
+    cfg = make_cfg(tmp_path)
+    httpd = serve(lambda: open_store(cfg), host="127.0.0.1", port=0, blocking=False)
+    base = f"http://127.0.0.1:{httpd.server_port}"
+    try:
+        page = urllib.request.urlopen(f"{base}/signals/vol_spike", timeout=10).read().decode()
+        columns = re.findall(r'data-sort="([^"]+)"', page.split("<thead>")[1].split("</thead>")[0])
+        assert columns, "表头应该有可排序列"
+
+        def cells(path, index):
+            body = (
+                urllib.request.urlopen(f"{base}{path}", timeout=10)
+                .read()
+                .decode("utf-8")
+                .split("<tbody>")[1]
+            )
+            out = []
+            for row in re.findall(r"<tr>(.*?)</tr>", body, re.S):
+                tds = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
+                if len(tds) > index:
+                    out.append(re.sub(r"<[^>]+>", "", tds[index]).strip())
+            return out
+
+        for key in columns:
+            for direction in ("asc", "desc"):
+                values = cells(
+                    f"/signals/vol_spike?sort={key}&order={direction}", columns.index(key)
+                )
+                assert values, f"{key}/{direction} 应该返回数据"
+                numbers = []
+                for value in values:
+                    try:
+                        numbers.append(float(value.replace("+", "").replace(",", "")))
+                    except ValueError:
+                        numbers = None
+                        break
+                if numbers is not None:
+                    assert numbers == sorted(
+                        numbers, reverse=(direction == "desc")
+                    ), f"{key}/{direction} 顺序不对：{numbers[:5]}"
+                else:
+                    assert values == sorted(
+                        values, reverse=(direction == "desc")
+                    ), f"{key}/{direction} 文本顺序不对：{values[:5]}"
+        # 板块按中文名排序（沪主板/创业板/科创板/深主板…），不是内部键
+        assert cells("/signals/vol_spike?sort=board&order=asc", columns.index("board")) == sorted(
+            cells("/signals/vol_spike?sort=board&order=asc", columns.index("board"))
+        )
     finally:
         httpd.shutdown()
         httpd.server_close()
