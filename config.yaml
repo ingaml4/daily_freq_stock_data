@@ -35,11 +35,15 @@ mairui:
 # 单次运行最多处理多少只股票（0=不限）。证书限频低时设成 800，多次运行自动收敛。
 # sync:
 #   max_symbols_per_run: 0
+#   history_years: 3          # 首次回补拉几年历史（3 年够用；0=从头全量，很慢）
 
 # 每天抓哪些日频指标（每次请求只拿一种指标的一只股票，所以请求数=股票数×种类）
 # indicators:
 #   enabled: true
 #   kinds: [macd, kdj, boll]   # 可选 ma
+#   source: local              # local=本地按日线算（默认，零接口请求、毫秒级）；api=拉麦蕊接口
+#   local_chunk: 400           # 本地计算一批多少只（2G 内存保持 300~500）
+#   local_days: 5              # 每天只重算最近 5 个交易日（判金叉/触轨够用）
 #   limit: 10                  # 日更只取最近 10 条，够判断金叉
 #   publish_time: "15:35"      # 当日指标发布时间，早于它运行就跳过当天（省请求）
 

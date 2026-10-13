@@ -587,6 +587,22 @@ class RateLimiter:
             self._next_at = now + self.min_interval
 
 
+def _auto_workers(workers: Any, rate_limit_per_min: float) -> int:
+    """并发线程数：填 0（或负数）= 按限频自动推算。
+
+    单个请求大约 0.2~0.5 秒，所以"每分钟 N 次"需要的并发 ≈ N/60 × 0.3 ≈ N/200，
+    再留点余量。基础档 300 → 4 个线程就够（多了也只会空转抢 GIL），包年 3000 → 24。
+    """
+    try:
+        value = int(workers or 0)
+    except (TypeError, ValueError):
+        value = 0
+    if value > 0:
+        return value
+    rate = float(rate_limit_per_min or 300)
+    return int(min(32, max(4, round(rate / 125))))
+
+
 class MairuiClient:
     """带重试 / 限流 / 并发的麦蕊智数客户端。"""
 
@@ -594,7 +610,7 @@ class MairuiClient:
         self,
         licence: str = "",
         *,
-        workers: int = 8,
+        workers: int = 0,
         timeout: float = 15.0,
         retries: int = 3,
         sleep: float = 0.05,
@@ -607,7 +623,8 @@ class MairuiClient:
         session: Optional[requests.Session] = None,
     ):
         self.licence = str(licence or "").strip()
-        self.workers = max(1, int(workers))
+        self.rate_limit_per_min = float(rate_limit_per_min or 0)
+        self.workers = _auto_workers(workers, self.rate_limit_per_min)
         self.timeout = float(timeout)
         self.retries = max(0, int(retries))
         self.sleep = max(0.0, float(sleep))
@@ -616,7 +633,7 @@ class MairuiClient:
         self.adjust = normalize_adjust(adjust)
         self.spot_mode = str(spot_mode or "auto").strip().lower()
         self.multi_batch = max(1, min(int(multi_batch), 20))
-        self.limiter = RateLimiter(rate_limit_per_min)
+        self.limiter = RateLimiter(self.rate_limit_per_min)
         self.session = session or requests.Session()
         self.session.headers.update(DEFAULT_HEADERS)
         self.request_count = 0
@@ -625,7 +642,7 @@ class MairuiClient:
     def from_config(cls, cfg) -> "MairuiClient":
         return cls(
             licence=cfg.get("mairui.licence", ""),
-            workers=cfg.get("mairui.workers", 8),
+            workers=cfg.get("mairui.workers", 0),
             timeout=cfg.get("mairui.timeout", 15.0),
             retries=cfg.get("mairui.retries", 3),
             sleep=cfg.get("mairui.sleep", 0.05),

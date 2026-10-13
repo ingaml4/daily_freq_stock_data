@@ -20,6 +20,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .indicators import compute_and_store
 from .mairui import MairuiClient, MairuiError, board_of, spot_trade_date
 from .store import Store
 from .tzutil import shift
@@ -164,10 +165,12 @@ def _plan_jobs(
     have_by_secid: Dict[str, set],
     full_if_missing: bool = True,
     listed: Optional[Dict[str, str]] = None,
+    full_beg: str = "0",
 ) -> Dict[str, List[str]]:
     """算出"每只股票要从哪一天开始补"，返回 ``{beg: [secid, ...]}``。
 
-    * 本地一条都没有（新股 / 首次运行）-> ``"0"``（全历史）
+    * 本地一条都没有（新股 / 首次运行）-> ``full_beg``（``"0"``=全历史，
+      也可以给 ``2023-09-01`` 这种起点，避免一次拉三十年）
     * 中间或尾部有缺口 -> 从最早缺失的那天开始拉（顺带覆盖缺口之后的所有日期）
     * 知道上市日期的，上市之前的日期不算缺口（否则新股每天都会被重复请求）
     """
@@ -178,7 +181,7 @@ def _plan_jobs(
         dates = have_by_secid.get(secid)
         if not dates:
             if full_if_missing:
-                jobs.setdefault("0", []).append(secid)
+                jobs.setdefault(str(full_beg or "0"), []).append(secid)
             continue
         floor = listed.get(secid) or ""
         missing = [day for day in expected_set if day >= floor and day not in dates]
@@ -223,14 +226,17 @@ def sync_bars(
     secids: Sequence[str],
     expected: Sequence[str],
     max_symbols: int = 0,
+    full_beg: str = "0",
     progress=None,
 ) -> int:
-    """按交易日历补齐日线缺口；没抓过的股票回补全历史。"""
+    """按交易日历补齐日线缺口；没抓过的股票从 ``full_beg`` 开始回补。"""
     if not secids or not expected:
         return 0
     window_start = min(expected)
     have = store.bar_dates_by_secid(since=window_start)
-    jobs = _plan_jobs(secids, expected, have, listed=store.listed_dates())
+    jobs = _plan_jobs(
+        secids, expected, have, listed=store.listed_dates(), full_beg=str(full_beg or "0")
+    )
     todo = sum(len(group) for group in jobs.values())
     if not todo:
         log.info("日线数据完整（%s 只 / 窗口 %s 起），无需回补", len(secids), window_start)
@@ -355,10 +361,50 @@ def sync_indicators(
     max_symbols: int = 0,
     progress=None,
 ) -> int:
-    """按交易日历补齐技术指标缺口（每种指标单独比对）。"""
+    """补齐技术指标缺口。
+
+    ``indicators.source`` 决定数据从哪来（默认 ``local``，本地按日线算，零接口请求）：
+
+    * ``local`` —— 本地计算（毫秒级、不占配额、可随时重算历史）；
+    * ``api``   —— 拉麦蕊的指标接口（一只股票一种指标一次请求，慢但口径以券商为准）。
+    """
     if not secids or not expected or not kinds:
         return 0
+    source = str(cfg.get("indicators.source", "local") or "local").strip().lower()
     window_start = min(expected)
+    if source == "local":
+        # 全都本地算（零接口请求）：新股/从没算过的整段补，老股票只重算最近几天（够判金叉）
+        have = store.indicator_dates_by_secid(since=window_start)
+        fresh = [secid for secid in secids if not have.get(secid)]
+        known = [secid for secid in secids if have.get(secid)]
+        keep = max(2, int(cfg.get("indicators.local_days", 5) or 5))
+        log.info(
+            "技术指标：本地计算（%s 只：%s 只补全窗口、%s 只只重算最近 %s 天；零接口请求）",
+            len(secids),
+            len(fresh),
+            len(known),
+            keep,
+        )
+        chunk = int(cfg.get("indicators.local_chunk", 400) or 400)
+        written = 0
+        if fresh:
+            written += compute_and_store(
+                store, fresh, cfg=cfg, dates=expected, kinds=kinds, chunk=chunk, progress=progress
+            )
+        if known:
+            written += compute_and_store(
+                store,
+                known,
+                cfg=cfg,
+                dates=list(expected)[-keep:],
+                kinds=kinds,
+                chunk=chunk,
+                progress=progress,
+            )
+        stats.indicators_written += written
+        log.info("技术指标（本地）完成：%s 行", written)
+        return written
+
     limit = int(cfg.get("indicators.limit", 0) or 0)
     batch = max(1, int(cfg.get("mairui.backfill_batch", 400) or 400))
     written = 0

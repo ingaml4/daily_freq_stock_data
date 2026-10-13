@@ -25,7 +25,7 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -174,6 +174,17 @@ def _limit(args: argparse.Namespace, cfg: Config) -> int:
     return int(value or 0)
 
 
+def _history_start(cfg: Config) -> str:
+    """回补起点：``sync.history_start`` 优先，否则按 ``sync.history_years`` 往前推。"""
+    explicit = str(cfg.get("sync.history_start") or "").strip()
+    if explicit and explicit not in ("0", "00000000"):
+        return explicit
+    years = int(cfg.get("sync.history_years", 3) or 0)
+    if years <= 0:
+        return "0"
+    return shift(tz_today(), -int(round(365.25 * years)))
+
+
 def _log_errors(stats: SyncStats, title: str = "请求失败") -> None:
     if stats.errors:
         log.warning("%s %s 次，样例：%s", title, len(stats.errors), stats.errors[0])
@@ -309,7 +320,7 @@ def cmd_backfill(cfg: Config, args: argparse.Namespace) -> int:
     sync_float_shares(store, client, cfg, stats, secids, limit=_limit(args, cfg))
     start, end = _window(cfg, args)
     if not getattr(args, "start", None):
-        start = cfg.get("sync.history_start", "1990-01-01")
+        start = _history_start(cfg)
     expected = resolve_trade_days(client, start, end, cfg)
     sync_bars(
         store,
@@ -411,6 +422,9 @@ def cmd_update(cfg: Config, args: argparse.Namespace) -> int:
 def cmd_indicators(cfg: Config, args: argparse.Namespace) -> int:
     """按交易日历补齐日频技术指标（MACD / KDJ / BOLL / MA）。"""
     store = open_store(cfg)
+    source = getattr(args, "source", None)
+    if source:  # 命令行临时覆盖配置
+        cfg["indicators"]["source"] = source
     client = MairuiClient.from_config(cfg)
     stats = SyncStats()
     kinds = indicator_kinds(cfg, args)
@@ -424,7 +438,7 @@ def cmd_indicators(cfg: Config, args: argparse.Namespace) -> int:
         secids = sync_universe(store, client, cfg, stats)
     start, end = _window(cfg, args)
     if not getattr(args, "start", None):
-        start = cfg.get("sync.history_start", "1990-01-01")
+        start = _history_start(cfg)
     expected = resolve_trade_days(client, start, end, cfg)
     started = time.time()
     sync_indicators(
@@ -695,6 +709,7 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
             secids,
             bars_expected,
             max_symbols=_limit(args, cfg),
+            full_beg=_history_start(cfg),
             progress=_progress("日线"),
         )
         if _indicators_due(cfg, args, expected, trade_date):
@@ -821,7 +836,14 @@ def cmd_check(cfg: Config, args: argparse.Namespace) -> int:
         f"  快照取数：{cfg.get('mairui.spot_mode', 'auto')}"
         f"（多股一批 {cfg.get('mairui.multi_batch', 20)} 只；all=全市场接口，需 Pro/包年档）"
         f" · 限频 {cfg.get('mairui.rate_limit_per_min')} 次/分钟"
+        f" · 并发 {MairuiClient.from_config(cfg).workers}（0=自动）"
     )
+    print(
+        f"  指标来源：{cfg.get('indicators.source', 'local')}"
+        f"（local=本地按日线算，零接口请求；api=拉接口）"
+        f" · 种类 {', '.join(cfg.get('indicators.kinds') or [])}"
+    )
+    _print_request_budget(cfg, info)
     print(f"  信号规则：{', '.join(normalize_rules(cfg.get('signals.rules')))}")
     store.close()
 
@@ -867,6 +889,30 @@ def cmd_check(cfg: Config, args: argparse.Namespace) -> int:
         finally:
             _close(client)
     return 0
+
+
+def _print_request_budget(cfg: Config, info: Dict[str, Any]) -> None:
+    """按当前配置估一下"首次/每天要发多少请求、大概多久"，方便选证书档位。"""
+    symbols = int(info.get("symbols") or 0) or 5400
+    rate = float(cfg.get("mairui.rate_limit_per_min", 300) or 300)
+    spot_mode = str(cfg.get("mairui.spot_mode", "auto")).lower()
+    batch = max(1, int(cfg.get("mairui.multi_batch", 20) or 20))
+    spot = 1 if spot_mode == "all" else max(1, (symbols + batch - 1) // batch)
+    kinds = cfg.get("indicators.kinds") or []
+    source = str(cfg.get("indicators.source", "local")).lower()
+    indicators = symbols * len(kinds) if source == "api" else 0
+    per_day = 1 + spot + indicators
+    first = per_day + symbols  # 首次还要把历史日线拉一遍
+
+    def minutes(count: int) -> str:
+        value = count / max(1.0, rate)
+        return f"{value:.0f} 分钟" if value < 90 else f"{value / 60:.1f} 小时"
+
+    print(
+        f"  请求预算：首次 ≈ {first} 次（约 {minutes(first)}）"
+        f" · 每天 ≈ {per_day} 次（约 {minutes(per_day)}）"
+        f" —— 按 {rate:g} 次/分钟算；改 mairui.rate_limit_per_min / indicators.source 都能提速"
+    )
 
 
 # --------------------------------------------------------------------------- 网页端
@@ -951,6 +997,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_ind.add_argument("--limit", type=int, help="最多处理 N 只（试点）")
     p_ind.add_argument("--start", help="起始日期 YYYY-MM-DD（默认全部历史）")
     p_ind.add_argument("--kinds", help="指标类型：macd,kdj,boll,ma")
+    p_ind.add_argument(
+        "--source",
+        choices=["local", "api"],
+        help="指标来源：local=本地按日线算（默认，零请求）；api=拉麦蕊接口",
+    )
 
     p_scan = sub.add_parser("scan", help="用本地数据扫描放量（可回看历史某天）")
     p_scan.add_argument("--trade-date", dest="trade_date", help="要扫描的交易日 YYYY-MM-DD")

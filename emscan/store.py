@@ -771,11 +771,11 @@ class Store:
         return ", ".join(picked)
 
     # ------------------------------------------------------------------ 指标
-    _INDICATOR_COLUMNS_ALL = ("secid", "date") + INDICATOR_ALL_COLUMNS
+    _INDICATOR_COLUMNS_ALL = ("secid", "date") + INDICATOR_ALL_COLUMNS + ("source",)
 
     @classmethod
     def _indicator_select_list(cls, columns: Optional[Sequence[str]]) -> str:
-        allowed = ("secid", "date") + INDICATOR_ALL_COLUMNS
+        allowed = ("secid", "date") + INDICATOR_ALL_COLUMNS + ("source",)
         if not columns:
             return ", ".join(allowed)
         picked = [c for c in columns if c in allowed]

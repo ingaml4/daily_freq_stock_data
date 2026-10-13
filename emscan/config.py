@@ -20,7 +20,8 @@ DEFAULTS: Dict[str, Any] = {
         # 也可用环境变量 MAIRUI_LICENCE / EMSCAN_LICENCE 覆盖，避免把证书写进仓库
         "licence": "",
         "base_url": "https://api.mairuiapi.com",
-        "workers": 8,
+        # 并发线程数：0=按限频自动推算（推荐）；手动填也别超过"每分钟次数/60 × 单个请求耗时"太多
+        "workers": 0,
         "timeout": 15.0,
         "retries": 3,
         "sleep": 0.05,
@@ -49,8 +50,10 @@ DEFAULTS: Dict[str, Any] = {
     # 自愈同步：脚本自己判断"缺了什么"，窗口决定往前比对多少天
     "reconcile_calendar_days": 45,
     "sync": {
-        # 首次回补只回补这个日期之后的日线（默认"从头"）；想省时间可以设近三年
-        "history_start": "1990-01-01",
+        # 首次回补只回补这个日期之后的日线（留空则用下面的 history_years）
+        "history_start": "",
+        # 回补几年历史（默认 3 年：MA60/BOLL/量能基准都够；0=从头全量，很慢）
+        "history_years": 3,
         # 单次运行最多处理多少只股票（0=不限）。限流小或想快速收敛时可设 800
         "max_symbols_per_run": 0,
     },
@@ -75,6 +78,13 @@ DEFAULTS: Dict[str, Any] = {
     "indicators": {
         "enabled": True,
         "kinds": ["macd", "kdj", "boll"],
+        # 指标来源：local=本地按日线算（默认，零接口请求、毫秒级、可随时重算）
+        #           api  =拉麦蕊指标接口（口径以券商为准，但每天 股票数×种类 次请求）
+        "source": "local",
+        # 本地计算时，一次处理多少只股票（控制内存；2G 内存保持 300~500）
+        "local_chunk": 400,
+        # 本地计算时，每天都重算最近几个交易日（判金叉/触轨只用得到今天和昨天）
+        "local_days": 5,
         # 日更时只取最近 N 条（0=全部历史）
         "limit": 10,
         # 当日指标几点发布：麦蕊标注日线指标 15:35 更新。早于这个时间运行就跳过当天

@@ -296,7 +296,7 @@ def _seed_symbols(store, secids):
 
 
 def test_sync_indicators_heals_each_kind(tmp_path):
-    cfg = make_cfg(tmp_path)
+    cfg = make_cfg(tmp_path, {"indicators": {"source": "api"}})
     store = open_store(cfg)
     dates = trading_dates(3, end="2026-10-09")
     secids = ["1.600001", "0.300002"]
@@ -373,6 +373,7 @@ def test_signals_command_end_to_end(tmp_path):
                 "logs_dir": str(tmp_path / "logs"),
             },
             "signals": {"top_n": 10},
+            "indicators": {"source": "api"},  # 这里用假客户端验证"接口取数"链路
         },
     )
     store = open_store(cfg)
@@ -509,7 +510,8 @@ def test_run_writes_daily_signal_cache(tmp_path):
                 "path": str(store_path),
                 "reports_dir": str(tmp_path / "reports"),
                 "logs_dir": str(tmp_path / "logs"),
-            }
+            },
+            "indicators": {"source": "api"},  # 用假客户端验证接口链路
         },
     )
     store = open_store(cfg)
