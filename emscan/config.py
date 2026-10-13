@@ -117,6 +117,8 @@ DEFAULTS: Dict[str, Any] = {
         "session_days": 7,
         # 排序是纯前端的（不进 URL）；这个开关控制"是否用浏览器本地存储记住上次排序列"
         "remember_sort": True,
+        # 页面上"数据几点更新"的提示（跟 install_services.sh --daily-times 保持一致）
+        "update_times": "15:32,17:15",
     },
     "notify": {
         "enabled": False,
@@ -185,6 +187,7 @@ class Config:
             "EMSCAN_WEB_PORT": "port",
             "EMSCAN_WEB_PASSWORD": "password",
             "EMSCAN_WEB_TOKEN": "password",  # 旧名字，兼容已有部署
+            "EMSCAN_UPDATE_TIMES": "update_times",
         }
         for env_key, cfg_key in env_web.items():
             value = os.environ.get(env_key)

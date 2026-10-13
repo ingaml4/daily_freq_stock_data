@@ -78,3 +78,4 @@ mairui:
 #   password: ""        # 访问口令（也可用 EMSCAN_WEB_PASSWORD；空=开放访问，只适合本机）
 #   session_days: 7     # 登录后 Cookie 记住几天
 #   remember_sort: true # 用浏览器本地存储记住上次排序列（排序本身是纯前端的，不进 URL）
+#   update_times: "15:32,17:15"   # 页面上"系统几点更新"的提示（install_services.sh 会按 --daily-times 写进 env）

@@ -37,6 +37,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from .mairui import BOARD_LABELS
 from .signals import FLAG_LABELS
 from .store import Store
+from .tzutil import now_hm, today as tz_today
 
 log = logging.getLogger("emscan")
 
@@ -129,6 +130,57 @@ _CACHE: Dict[Tuple[Any, ...], "PageContext"] = {}
 _CACHE_LOCK = threading.Lock()
 _CACHE_MAX = 128
 
+# 系统每个交易日自动更新数据的时刻（北京时间）—— 默认值与 install_services.sh 的 --daily-times 一致
+DEFAULT_UPDATE_TIMES = "15:32,17:15"
+
+# 两趟各做一半：15:32 收盘快照 + 放量扫描；17:15 技术指标（麦蕊 15:35 才发布）+ 金叉/布林信号
+UPDATE_SCHEDULE_NOTE = (
+    "系统每个交易日（北京时间，周一至周五）自动更新两次："
+    "15:32 收盘行情 + 放量扫描；17:15 技术指标 + 金叉/布林信号。非交易日不更新。"
+)
+
+
+def parse_update_times(raw: str = "") -> List[str]:
+    out: List[str] = []
+    for part in str(raw or DEFAULT_UPDATE_TIMES).replace("，", ",").split(","):
+        item = part.strip()
+        if len(item) == 5 and item[2] == ":" and item.replace(":", "").isdigit():
+            out.append(item)
+    return out or parse_update_times(DEFAULT_UPDATE_TIMES)
+
+
+def format_update_note(raw: str = "") -> str:
+    times = parse_update_times(raw)
+    return "系统更新（北京时间）：交易日 " + "、".join(times) + "；非交易日不更新"
+
+
+def explain_stale(cache_date: str, today: str, raw_times: str = "") -> str:
+    """数据不是"当天"时，用一句话说清：现在几点、下一个更新点、大概是休市还是延迟。"""
+    times = parse_update_times(raw_times)
+    now = now_hm()
+    pending = [t for t in times if t > now]
+    if cache_date > today:
+        return f"缓存里是 {cache_date}（晚于今天 {today}），请检查系统时间。"
+    if pending:
+        return (
+            f"现在北京时间 {now}，{today} 的数据还没跑：下一个更新点是 {pending[0]}。"
+            f"想要立刻更新可执行 systemctl start emscan-daily.service"
+        )
+    return (
+        f"现在北京时间 {now}，已经过了今天的更新点（{'、'.join(times)}），"
+        f"说明今天大概率不是交易日（周末/节假日），或者抓取失败——"
+        f"可看 journalctl -u emscan-daily -n 50 确认"
+    )
+
+
+def _cache_written_at(store: Store, date: str) -> str:
+    """这一天缓存最后一次写入的时间（用来判断"数据是刚跑出来的"还是"停在昨天"）。"""
+    row = store.conn.execute(
+        "SELECT MAX(computed_at) AS t FROM daily_signals WHERE date = ?", (str(date),)
+    ).fetchone()
+    return str(row["t"] or "") if row else ""
+
+
 # 登录会话
 SESSION_COOKIE = "emscan_session"
 DEFAULT_SESSION_DAYS = 7
@@ -187,6 +239,12 @@ class PageContext:
     title: str = ""
     limit: int = 300
     error: str = ""
+    # 数据新鲜度（日频交易只看最新一天，所以这几项要显眼）
+    today: str = ""  # 北京时间今天
+    stale: bool = False  # 缓存日期 != 今天
+    stale_reason: str = ""  # 给用户的解释（含更新时间提示）
+    cache_written: str = ""  # 缓存最后一次写入时间
+    update_note: str = ""  # "交易日 15:32 / 17:15 更新（北京时间）"
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -197,6 +255,11 @@ class PageContext:
             "query": self.query,
             "total": self.total,
             "dates": self.dates,
+            "today": self.today,
+            "stale": self.stale,
+            "stale_reason": self.stale_reason,
+            "cache_written": self.cache_written,
+            "update_note": self.update_note,
             "rows": self.rows,
         }
 
@@ -210,20 +273,39 @@ def build_context(
     query: str = "",
     limit: int = 300,
     use_cache: bool = True,
+    latest_only: bool = True,
+    today: Optional[str] = None,
+    update_times: str = "",
 ) -> PageContext:
     """从缓存里取一页数据：按"日期 + 信号"筛，再搜索、排序、截断。
 
     全程用 sqlite3 + 纯 Python（不经过 pandas），再套一层"数据版本"缓存：
     单页渲染从 ~26 ms 降到冷态 ~7 ms、暖态 ~0.2 ms（见 README"网页端"一节）。
+
+    ``latest_only=True``（页面用）永远只看**最新一个交易日**，不提供翻历史；
+    并算好"数据是不是当天的 / 系统几点更新"这些提示（``stale`` / ``stale_reason``）。
     """
     view_key = normalize_view(view)
     spec = VIEWS[view_key]
     sort_key, sort_order = normalize_sort(sort, order, view_key)
     query = str(query or "").strip()
     limit = max(1, int(limit))
+    today = str(today or tz_today())
+    update_times = str(update_times or DEFAULT_UPDATE_TIMES)
+    page_date = None if latest_only else date
 
     version = _data_version(store) if use_cache else None
-    cache_key = (version, view_key, date, sort_key, sort_order, query, limit)
+    cache_key = (
+        version,
+        view_key,
+        page_date,
+        sort_key,
+        sort_order,
+        query,
+        limit,
+        today,
+        update_times,
+    )
     if version is not None:
         with _CACHE_LOCK:
             hit = _CACHE.get(cache_key)
@@ -238,21 +320,29 @@ def build_context(
     ]
     ctx = PageContext(
         view=view_key,
-        date=date,
+        date=page_date,
         sort=sort_key,
         order=sort_order,
         query=query,
         dates=dates,
         title=spec["title"],
         limit=limit,
+        today=today,
+        update_note=format_update_note(update_times),
     )
     if not dates:
         ctx.error = (
             "还没有每日信号缓存：先在服务器上跑一次 `python3 -m emscan run`（或 scan + signals）"
         )
+        ctx.stale = True
+        ctx.stale_reason = "本地还没有任何缓存数据，页面上暂时没有可看的内容。"
         return ctx
     if ctx.date not in dates:
-        ctx.date = dates[0]
+        ctx.date = dates[0]  # 页面永远看最新的一天
+    ctx.stale = str(ctx.date) != today
+    if ctx.stale:
+        ctx.stale_reason = explain_stale(str(ctx.date), today, update_times)
+    ctx.cache_written = _cache_written_at(store, str(ctx.date))
 
     where = ["d.date = ?", "COALESCE(d.%s, 0) = 1" % spec["flag"]]
     params: List[Any] = [ctx.date]
@@ -462,6 +552,14 @@ main{padding:10px 12px 40px}
 .hint{color:var(--muted);font-size:12px;margin-bottom:8px}
 .hint b{color:var(--fg)}
 .err{background:#2a1a1a;border:1px solid #5b2a2a;padding:10px;border-radius:8px}
+.banner{border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px;
+background:#3a2a12;border:1px solid #7a5a1e}
+.banner.ok{background:#132a1e;border-color:#245c3a}
+.banner .banner-title{font-weight:700;font-size:14px;margin-bottom:4px}
+.banner .banner-body{color:var(--fg);opacity:.92}
+.banner .banner-note{color:var(--muted);font-size:12px;margin-top:4px}
+.toolbar .refresh{padding:6px 10px;border:1px solid var(--line);border-radius:8px;
+background:var(--card);color:var(--fg);font-size:13px}
 table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
 thead th{position:sticky;top:0;background:var(--card);text-align:right;
 white-space:nowrap;padding:8px;border-bottom:1px solid var(--line);
@@ -667,19 +765,35 @@ def render_html(
 
     order_cn = "升序" if ctx.order == "asc" else "降序"
     sort_label = dict((key, label) for key, label, _, _ in COLUMNS).get(ctx.sort, ctx.sort)
+    written = ctx.cache_written or "-"
     hint = (
-        f"交易日 <b>{html.escape(ctx.date or '-')}</b> · 命中 <b>{ctx.total}</b> 只"
-        f"（显示前 {min(ctx.total, ctx.limit)} 只）· 排序："
+        f"数据日期 <b>{html.escape(ctx.date or '-')}</b>"
+        f"（今天 {html.escape(ctx.today or '-')}）· 缓存写入 <b>{html.escape(written)}</b> · "
+        f"命中 <b>{ctx.total}</b> 只（显示前 {min(ctx.total, ctx.limit)} 只）· 排序："
         f'<b id="sortState" data-key="{html.escape(ctx.sort)}" '
         f'data-order="{html.escape(ctx.order)}">{html.escape(sort_label)} {order_cn}</b>'
     )
     if ctx.query:
         hint += f" · 搜索：<b>{html.escape(ctx.query)}</b>"
-    dates = "".join(
-        f'<option value="{html.escape(day)}"'
-        f'{" selected" if day == ctx.date else ""}>{html.escape(day)}</option>'
-        for day in ctx.dates[:120]
-    )
+    banner = ""
+    if ctx.stale and not ctx.error:
+        banner = (
+            '<div class="banner">'
+            f'<div class="banner-title">⚠ 数据不是当天的：显示的是 '
+            f'{html.escape(str(ctx.date or "-"))} 的缓存</div>'
+            f'<div class="banner-body">{html.escape(ctx.today)} 还没有数据。'
+            f"{html.escape(ctx.stale_reason)}</div>"
+            f'<div class="banner-note">{html.escape(UPDATE_SCHEDULE_NOTE)}</div>'
+            "</div>"
+        )
+    elif not ctx.error:
+        banner = (
+            '<div class="banner ok">'
+            f'<div class="banner-title">✔ 数据就是今天的（{html.escape(str(ctx.date or "-"))}）'
+            f"，缓存写入 {html.escape(written)}</div>"
+            f'<div class="banner-note">{html.escape(UPDATE_SCHEDULE_NOTE)}</div>'
+            "</div>"
+        )
     body = (
         f'<div class="err">{html.escape(ctx.error)}</div>'
         if ctx.error
@@ -709,12 +823,13 @@ def render_html(
     {('<a class="logout" href="/logout">退出登录</a>') if show_logout else ""}</div>
   <nav>{"".join(nav)}</nav>
   <form class="toolbar" method="get" action="/signals/{ctx.view}">
-    <label>日期 <select name="date" onchange="this.form.submit()">{dates}</select></label>
     <input name="q" value="{html.escape(ctx.query)}" placeholder="代码/名称" size="10">
     <button type="submit">查询</button>
+    <a class="refresh" href="/signals/{ctx.view}">刷新</a>
   </form>
 </header>
 <main>
+  {banner}
   <div class="hint">{hint}</div>
   {body}{empty}
 </main>
@@ -736,6 +851,7 @@ def make_handler(
     password: str = "",
     session_days: int = DEFAULT_SESSION_DAYS,
     remember_sort: bool = True,
+    update_times: str = DEFAULT_UPDATE_TIMES,
 ) -> type:
     """生成一个 ``BaseHTTPRequestHandler`` 子类。
 
@@ -748,8 +864,11 @@ def make_handler(
     * ``/healthz``                   -> 探活（**不校验口令**，只回 ``ok``、不含任何数据，
       方便 nginx/k8s 的 healthCheck 直接打）
 
-    页面上的排序是纯前端的（点表头立刻重排，地址栏只有 ``view`` + ``date``）；
+    页面上的排序是纯前端的（点表头立刻重排，地址栏始终只有视图名）；
     ``remember_sort`` 打开时用 localStorage 记住上次排序列。
+
+    页面**只显示最新一天的缓存**（不提供翻历史），并显著标注"数据日期 / 是不是当天 /
+    系统几点更新"，``update_times`` 用来生成那段提示。
 
     鉴权：设置了口令就要求登录（Cookie 会话），另外支持 HTTP Basic
     （``curl -u ":$口令"``）方便脚本/接口调用。口令为空则视为"开放访问"（只适合本机）。
@@ -881,6 +1000,7 @@ def make_handler(
                 self._send("404 Not Found".encode("utf-8"), 404, "text/plain; charset=utf-8")
                 return
 
+            is_api = path == "/api/signals"
             try:
                 ctx = build_context(
                     store_factory(),
@@ -890,13 +1010,15 @@ def make_handler(
                     order=params.get("order"),
                     query=params.get("q", ""),
                     limit=int(params.get("limit", limit) or limit),
+                    latest_only=not is_api,  # 页面只看最新一天；API 允许指定日期/排序
+                    update_times=update_times,
                 )
             except Exception as exc:  # 页面永远要能打开
                 log.exception("网页渲染失败：%s", exc)
                 self._send(f"服务端错误：{exc}".encode("utf-8"), 500, "text/plain; charset=utf-8")
                 return
 
-            if path == "/api/signals":
+            if is_api:
                 self._send(
                     render_json(ctx).encode("utf-8"), ctype="application/json; charset=utf-8"
                 )
@@ -954,6 +1076,7 @@ def serve(
     password: str = "",
     session_days: int = DEFAULT_SESSION_DAYS,
     remember_sort: bool = True,
+    update_times: str = DEFAULT_UPDATE_TIMES,
     blocking: bool = True,
 ) -> ThreadingHTTPServer:
     """起一个网页服务，返回 server 对象（``blocking=False`` 时自己开线程，方便测试）。"""
@@ -964,6 +1087,7 @@ def serve(
         password=password,
         session_days=session_days,
         remember_sort=remember_sort,
+        update_times=update_times,
     )
     httpd = ThreadingHTTPServer((host, int(port)), handler)
     log.info(
@@ -972,6 +1096,7 @@ def serve(
         httpd.server_port,
         "、".join(spec["nav"] for spec in VIEWS.values()),
     )
+    log.info("页面只显示最新一天缓存；%s", format_update_note(update_times))
     if password:
         log.info("已开启口令登录：浏览器首次访问跳 /login，登录后 Cookie 记住 %s 天", session_days)
     elif host not in ("127.0.0.1", "localhost"):

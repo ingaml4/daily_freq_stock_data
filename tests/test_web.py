@@ -11,6 +11,7 @@ import urllib.request
 from helpers import make_cfg
 
 from emscan.cli import open_store
+from emscan.mairui import BOARD_LABELS
 from emscan.web import (
     DEFAULT_VIEW,
     VIEWS,
@@ -40,6 +41,27 @@ def _seed(tmp_path, config=None):
     store = open_store(cfg)
     store.upsert_symbols(
         [
+            {
+                "secid": "1.600000",
+                "code": "600000",
+                "name": "浦发银行",
+                "market": 1,
+                "board": "sh_main",
+            },
+            {
+                "secid": "1.600001",
+                "code": "600001",
+                "name": "邯郸钢铁",
+                "market": 1,
+                "board": "sh_main",
+            },
+            {
+                "secid": "0.300001",
+                "code": "300001",
+                "name": "特锐德",
+                "market": 0,
+                "board": "sz_gem",
+            },
             {
                 "secid": "0.000933",
                 "code": "000933",
@@ -123,6 +145,67 @@ def _seed(tmp_path, config=None):
                 "amount": 3.0e9,
                 "turnover": 0.3,
             },
+            # 再补几只"放量命中"的样本，让每一列都有多个不同值（排序测试才不退化）
+            {
+                "secid": "1.600000",
+                "date": date,
+                "close": 5.5,
+                "pct_chg": -1.2,
+                "amount": 3.0e8,
+                "turnover": 8.8,
+                "vol_ratio_5": 2.2,
+                "vol_ratio_20": 1.9,
+                "vol_z60": 3.3,
+                "boll_pos": 0.55,
+                "boll_lower": 5.0,
+                "macd_diff": -0.5,
+                "macd_dea": -0.2,
+                "macd_bar": -0.6,
+                "kdj_k": 20.0,
+                "kdj_d": 30.0,
+                "kdj_j": 0.0,
+                "s_vol_spike": 1,
+            },
+            {
+                "secid": "1.600001",
+                "date": date,
+                "close": 88.8,
+                "pct_chg": 9.9,
+                "amount": 1.2e9,
+                "turnover": 15.5,
+                "vol_ratio_5": 4.4,
+                "vol_ratio_20": 3.3,
+                "vol_z60": 6.6,
+                "boll_pos": -0.1,
+                "boll_lower": 90.0,
+                "macd_diff": 1.1,
+                "macd_dea": 0.4,
+                "macd_bar": 1.4,
+                "kdj_k": 80.0,
+                "kdj_d": 60.0,
+                "kdj_j": 95.0,
+                "s_vol_spike": 1,
+            },
+            {
+                "secid": "0.300001",
+                "date": date,
+                "close": 12.3,
+                "pct_chg": 0.9,
+                "amount": 6.0e7,
+                "turnover": 3.3,
+                "vol_ratio_5": 2.9,
+                "vol_ratio_20": 2.1,
+                "vol_z60": 4.1,
+                "boll_pos": 0.33,
+                "boll_lower": 11.9,
+                "macd_diff": 0.2,
+                "macd_dea": 0.1,
+                "macd_bar": 0.2,
+                "kdj_k": 55.0,
+                "kdj_d": 50.0,
+                "kdj_j": 65.0,
+                "s_vol_spike": 1,
+            },
             {
                 "secid": "1.601058",
                 "date": "2026-10-10",
@@ -170,10 +253,11 @@ def test_normalize_sort_uses_view_default():
 def test_build_context_filters_by_view_and_date(tmp_path):
     _, store, date = _seed(tmp_path)
     vol = build_context(store, view="vol_spike", date=date)
-    assert [row["code"] for row in vol.rows] == ["000933"]  # 只有它 s_vol_spike=1
-    assert vol.total == 1 and vol.sort == "amount_yi"
-    assert vol.rows[0]["url"] == "https://www.xueqiu.com/S/SZ000933"
-    assert vol.rows[0]["signals_cn"] == "突然放量、MACD金叉"
+    assert [row["code"] for row in vol.rows] == ["600001", "600000", "000933", "300001"]
+    assert vol.total == 4 and vol.sort == "amount_yi"
+    hit = [row for row in vol.rows if row["code"] == "000933"][0]
+    assert hit["url"] == "https://www.xueqiu.com/S/SZ000933"
+    assert hit["signals_cn"] == "突然放量、MACD金叉"
 
     macd = build_context(store, view="macd_golden", date=date)
     # 两只都金叉，按成交额降序：601058(9亿) 在前，000933(2亿) 在后
@@ -224,7 +308,7 @@ def test_page_cache_hits_and_invalidates(tmp_path):
     first = build_context(store, view="vol_spike", date=date)
     second = build_context(store, view="vol_spike", date=date)
     assert second is first  # 命中缓存，同一个对象
-    assert second.total == 1
+    assert second.total == 4
     # 写入者更新了同一行（computed_at 变了）-> 版本变化 -> 重新查询
     store.upsert_daily_signals(
         [
@@ -240,7 +324,15 @@ def test_page_cache_hits_and_invalidates(tmp_path):
     )
     third = build_context(store, view="vol_spike", date=date)
     assert third is not first
-    assert [row["code"] for row in third.rows] == ["600519", "000933"]  # 5 亿 > 2 亿
+    # 按成交额降序：600001(1.2e9) > 600519(5e8) > 600000(3e8) > 000933(2e8) > 300001(6e7)
+    assert [row["code"] for row in third.rows] == [
+        "600001",
+        "600519",
+        "600000",
+        "000933",
+        "300001",
+    ]
+    assert third.total == 5
     store.close()
 
 
@@ -260,6 +352,10 @@ def test_render_html_has_nav_sortable_headers_and_xueqiu_links(tmp_path):
     assert 'name="sort"' not in page and 'name="order"' not in page
     # 排序状态只体现在提示行；用 localStorage 记住上次排序列
     assert 'id="sortState"' in page and "emscan_sort" in page
+    # 只显示最新一天：没有日期选择器，但要有"数据日期 + 是否当天 + 更新时刻"的横幅
+    assert 'name="date"' not in page
+    assert "数据就是今天的" in page or "数据不是当天的" in page
+    assert "15:32" in page and "17:15" in page and "北京时间" in page
     # 代码超链接跳雪球
     assert 'href="https://www.xueqiu.com/S/SZ000933"' in page
     # 涨跌染色 + 移动端卡片
@@ -403,6 +499,29 @@ def test_healthz_needs_no_login(tmp_path):
         httpd.server_close()
 
 
+def test_page_shows_latest_day_and_staleness_banner(tmp_path):
+    """页面只服务"最新一天"：不给日期选择器；数据不是当天时给醒目提示 + 下次更新时间。"""
+    _, store, date = _seed(tmp_path)
+    # 数据 = 今天：绿色横幅，说明几点更新
+    fresh = render_html(build_context(store, view="vol_spike", today=date))
+    assert "数据就是今天的" in fresh
+    assert "15:32" in fresh and "17:15" in fresh and "北京时间" in fresh
+    assert 'name="date"' not in fresh
+    # 数据 = 昨天：黄色告警，说明下一个更新点
+    stale = render_html(build_context(store, view="vol_spike", today="2026-10-14"))
+    assert "数据不是当天的" in stale and date in stale
+    assert "2026-10-14 还没有数据" in stale
+    assert "下一个更新点" in stale or "大概率不是交易日" in stale
+    assert "系统每个交易日" in stale
+    # 空库也要有交代
+    store.conn.execute("DELETE FROM daily_signals")
+    store.conn.commit()
+    clear_cache()
+    empty = render_html(build_context(store, view="vol_spike", today=date))
+    assert "还没有每日信号缓存" in empty
+    store.close()
+
+
 def test_every_sortable_column_sorts_server_side(tmp_path):
     """回归：每一列表头点下去都必须 200 且顺序正确。
 
@@ -419,13 +538,13 @@ def test_every_sortable_column_sorts_server_side(tmp_path):
         columns = re.findall(r'data-sort="([^"]+)"', page.split("<thead>")[1].split("</thead>")[0])
         assert columns, "表头应该有可排序列"
 
-        def cells(path, index):
-            body = (
-                urllib.request.urlopen(f"{base}{path}", timeout=10)
-                .read()
-                .decode("utf-8")
-                .split("<tbody>")[1]
-            )
+        def cells(path, index, api: bool = False):
+            raw = urllib.request.urlopen(f"{base}{path}", timeout=10).read()
+            if api:
+                payload = json.loads(raw.decode("utf-8"))
+                key = columns[index]
+                return [row.get(key) for row in payload["rows"]]
+            body = raw.decode("utf-8").split("<tbody>")[1]
             out = []
             for row in re.findall(r"<tr>(.*?)</tr>", body, re.S):
                 tds = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
@@ -436,14 +555,23 @@ def test_every_sortable_column_sorts_server_side(tmp_path):
         for key in columns:
             for direction in ("asc", "desc"):
                 values = cells(
-                    f"/signals/vol_spike?sort={key}&order={direction}", columns.index(key)
+                    f"/api/signals?view=vol_spike&sort={key}&order={direction}",
+                    columns.index(key),
+                    api=True,
                 )
+                if key == "board":  # API 返回内部键，但排序按中文名
+                    values = [BOARD_LABELS.get(str(v), str(v)) for v in values]
                 assert values, f"{key}/{direction} 应该返回数据"
+                # SQL 是 (col IS NULL), col dir —— 空值必须排在最后
+                filled = [v for v in values if v is not None]
+                assert all(
+                    v is None for v in values[len(filled) :]
+                ), f"{key}/{direction} 空值没排在最后：{values}"
                 numbers = []
-                for value in values:
+                for value in filled:
                     try:
-                        numbers.append(float(value.replace("+", "").replace(",", "")))
-                    except ValueError:
+                        numbers.append(float(str(value).replace("+", "").replace(",", "")))
+                    except (TypeError, ValueError):
                         numbers = None
                         break
                 if numbers is not None:
@@ -451,13 +579,17 @@ def test_every_sortable_column_sorts_server_side(tmp_path):
                         numbers, reverse=(direction == "desc")
                     ), f"{key}/{direction} 顺序不对：{numbers[:5]}"
                 else:
-                    assert values == sorted(
-                        values, reverse=(direction == "desc")
-                    ), f"{key}/{direction} 文本顺序不对：{values[:5]}"
-        # 板块按中文名排序（沪主板/创业板/科创板/深主板…），不是内部键
-        assert cells("/signals/vol_spike?sort=board&order=asc", columns.index("board")) == sorted(
-            cells("/signals/vol_spike?sort=board&order=asc", columns.index("board"))
-        )
+                    assert filled == sorted(
+                        filled, reverse=(direction == "desc")
+                    ), f"{key}/{direction} 文本顺序不对：{filled[:5]}"
+        # 页面里板块显示的是中文名，且默认排序下也应有序（内部键 → 中文后比较）
+        page_board = [
+            BOARD_LABELS.get(str(v), str(v))
+            for v in cells(
+                "/api/signals?view=vol_spike&sort=board&order=asc", columns.index("board"), api=True
+            )
+        ]
+        assert page_board == sorted(page_board)
     finally:
         httpd.shutdown()
         httpd.server_close()

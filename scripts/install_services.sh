@@ -219,7 +219,7 @@ else
 fi
 
 # 这些变量由脚本自己管理；重装时环境文件里"其它"变量会原样保留，避免冲掉你手工加的配置
-MANAGED_ENV_KEYS="MAIRUI_LICENCE EMSCAN_WEB_HOST EMSCAN_WEB_PORT EMSCAN_WEB_PASSWORD EMSCAN_WEB_TOKEN TZ"
+MANAGED_ENV_KEYS="MAIRUI_LICENCE EMSCAN_WEB_HOST EMSCAN_WEB_PORT EMSCAN_WEB_PASSWORD EMSCAN_WEB_TOKEN EMSCAN_UPDATE_TIMES TZ"
 
 render_env() {
     cat <<ENV
@@ -231,6 +231,8 @@ MAIRUI_LICENCE=${LICENCE}
 EMSCAN_WEB_HOST=${WEB_HOST}
 EMSCAN_WEB_PORT=${WEB_PORT}
 EMSCAN_WEB_PASSWORD=${PASSWORD}
+# 页面上"数据几点更新"的提示（跟本脚本的 --daily-times 一致）
+EMSCAN_UPDATE_TIMES=${DAILY_TIMES}
 
 # 时区固定东八区（脚本内部也会再固定一次）
 TZ=Asia/Shanghai
@@ -308,7 +310,8 @@ if [ "${DRY_RUN}" = "true" ]; then
     log "----- ${TIMER_UNIT} -----"
     render_timer
     log "----- ${ENV_FILE} -----"
-    render_env | sed -e "s|${PASSWORD}|$(mask "${PASSWORD}")|"
+    # 预览时按"键"打码（别按值替换：口令短的话会把整份文件替换坏）
+    render_env | sed -E 's|^(MAIRUI_LICENCE=).*|\1<已隐藏>|; s|^(EMSCAN_WEB_PASSWORD=).*|\1<已隐藏>|' 
     step "将要执行的命令"
     cat <<CMDS
   install -d -m 755 ${SYSTEMD_DIR}
