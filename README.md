@@ -39,6 +39,7 @@ bash scripts/daily_scan.sh                  # 以后每天由 cron 跑这一条
 | `python3 -m emscan indicators [--kinds macd,kdj,boll]` | 补齐日频技术指标 |
 | `python3 -m emscan scan [--trade-date YYYY-MM-DD]` | 用本地数据做放量扫描（可回看历史某天） |
 | `python3 -m emscan signals [--rules ...] [--trade-date ...]` | 用本地数据筛指标信号 |
+| `python3 -m emscan box [--trade-date ...]` | 筛**箱体震荡 + 换手健康**的票（做 T 备选池） |
 | `python3 -m emscan hits [--date ...] [--secid ...] [--only ...]` | **查每日信号缓存**（四个主信号，不联网、秒回） |
 | `python3 -m emscan web [--host ...] [--port ...] [--password ...]` | **起网页端**：四个查询按钮 + 可排序表格（口令登录，代码跳雪球） |
 | `python3 -m emscan demo` | 无网络自检：合成行情跑通"落库→扫描→报告" |
@@ -112,7 +113,33 @@ WHERE date = '2026-10-13' AND s_vol_spike = 1 AND s_macd_golden = 1
 ORDER BY vol_ratio_5 DESC;
 ```
 
-## 网页端（四个按钮 + 可排序表格）
+## 箱体做T：找"长期磨箱体 + 换手健康"的票
+
+做 T（日内高抛低吸）要的不是趋势股，而是在一个箱体里来回磨、且换手健康的票。
+`emscan box` 用最近 **40 个交易日（≈2 个月）** 的日线判断，全部条件满足才算命中：
+
+| 条件 | 默认阈值（`config.yaml` 的 `box:` 段） | 为什么 |
+| --- | --- | --- |
+| 箱体高度 `(箱顶-箱底)/箱底` | 6% ~ 35% | 太窄做不出差价，太宽就不是箱体 |
+| 窗口内净涨跌幅 | \|净涨跌\| ≤ 12% | 单边涨/跌就是在趋势里，不是震荡 |
+| 均线缠绕 `\|MA5-MA20\|/MA20` | ≤ 4% | 均线缠在一起才是震荡格局 |
+| 日均换手率 | 1% ~ 15% | 太低进出困难，太高是妖股博弈 |
+| 换手率变异系数 `std/mean` | ≤ 1.0 | 换手"健康稳定"，不是忽冷忽热 |
+| 日均振幅 | 2% ~ 9% | 日内得有波动才有的做 |
+| 窗口内 \|涨跌幅\|≥9.5% 天数 | ≤ 2 天 | 连板/天地板不适合做 T |
+| 当日成交额 | ≥ 3000 万 | 流动性底线 |
+| 有效交易日（非停牌） | ≥ 35 天 | 数据太残缺不看 |
+
+结果按 **箱体位置升序** 排（`box_pos`：0=贴箱底、1=贴箱顶），越靠箱底越靠前；
+报告里同时给出箱顶/箱底、箱体高度、日均换手、日均振幅，便于你定高抛低吸价位。
+网页端它是第 5 个按钮（**箱体做T**），和放量/MACD金叉/KDJ金叉/布林下轨同级，表头同样可点排序。
+
+```bash
+python3 -m emscan box                       # 出报告（box_<交易日>.csv/xlsx）+ 写缓存
+python3 -m emscan hits --only box_range      # 只查缓存里的箱体票
+```
+
+## 网页端（五个按钮 + 可排序表格）
 
 ```bash
 python3 -m emscan web                          # 打开 http://127.0.0.1:8080/（默认只本机）
@@ -200,6 +227,7 @@ python3 -m emscan web --host 0.0.0.0 --password 我的口令   # 对外暴露：
 ⑤ 指标缺口      交易日历 vs 本地 indicators  → MACD/KDJ/BOLL 各自单独比对、单独补
 ⑥ 放量扫描      scan.py（纯本地计算）        → volscan_<交易日>.csv/xlsx + 写 daily_signals
 ⑦ 指标信号      signals.py（纯本地计算）     → signals_<交易日>.csv/xlsx + 写 daily_signals
+⑧ 箱体做T       box.py（纯本地计算）          → box_<交易日>.csv/xlsx + 写 daily_signals
 ```
 
 （③ 排在 ④ 前面是故意的：先用收盘快照把"今天"落库，再比对缺口，就不会为了补今天

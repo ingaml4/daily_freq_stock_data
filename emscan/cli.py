@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
+from .box import scan_box
 from .config import Config
 from .demo import synthesize
 from .mairui import (
@@ -75,6 +76,7 @@ PRIMARY_SIGNAL_ALIASES = {
     "macd_golden": "s_macd_golden",
     "kdj_golden": "s_kdj_golden",
     "boll_break_lower": "s_boll_break_lower",
+    "box_range": "s_box_range",
 }
 
 # `hits` 命令的展示列（读的是每日信号缓存 daily_signals）
@@ -95,6 +97,12 @@ HITS_COLUMNS = (
     "macd_dea",
     "kdj_k",
     "kdj_d",
+    "box_pos",
+    "box_width",
+    "box_high",
+    "box_low",
+    "box_avg_turnover",
+    "box_avg_amplitude",
 )
 
 HITS_LABELS = {
@@ -114,6 +122,12 @@ HITS_LABELS = {
     "macd_dea": "DEA",
     "kdj_k": "K",
     "kdj_d": "D",
+    "box_pos": "箱体位置",
+    "box_width": "箱体高度",
+    "box_high": "箱顶",
+    "box_low": "箱底",
+    "box_avg_turnover": "日均换手%",
+    "box_avg_amplitude": "日均振幅%",
 }
 
 HITS_FORMATS = {
@@ -129,6 +143,12 @@ HITS_FORMATS = {
     "macd_dea": "{:.3f}",
     "kdj_k": "{:.1f}",
     "kdj_d": "{:.1f}",
+    "box_pos": "{:.2f}",
+    "box_width": "{:.1%}",
+    "box_high": "{:.2f}",
+    "box_low": "{:.2f}",
+    "box_avg_turnover": "{:.2f}",
+    "box_avg_amplitude": "{:.2f}",
 }
 
 
@@ -524,6 +544,126 @@ def _cache_signal_result(store: Store, result) -> int:
     return store.upsert_daily_signals(frame.to_dict("records"))
 
 
+def cmd_box(cfg: Config, args: argparse.Namespace) -> int:
+    """筛"长期箱体震荡 + 换手健康"的票（做 T 备选池），并写进每日信号缓存。"""
+    store = open_store(cfg)
+    trade_date = getattr(args, "trade_date", None) or store.latest_date()
+    if not trade_date:
+        log.error("本地没有任何行情数据，先执行 backfill 或 run")
+        store.close()
+        return 1
+    window = int(cfg.get("box.window", 40) or 40)
+    log.info(
+        "箱体筛选：回看 %s 个交易日（≈%s 个月），交易日 %s",
+        window,
+        round(window / 20, 1),
+        trade_date,
+    )
+    hits = scan_box(store, cfg, trade_date=trade_date)
+    # 全市场都写缓存（命中的标记 1），方便网页/命令行随时查
+    features = _box_features_for_cache(store, cfg, trade_date)
+    if features is not None and not features.empty:
+        features["date"] = trade_date
+        written = store.upsert_daily_signals(features.to_dict("records"))
+        log.info("每日信号缓存已更新：%s 行（箱体特征 + 命中标记）", written)
+
+    if hits.empty:
+        print(f"箱体做T筛选 | 交易日 {trade_date}\n（没有符合条件的票）")
+        store.record_run("box", trade_date=trade_date, scanned=0, hits=0)
+        store.close()
+        return 0
+    hits = hits.sort_values(["box_pos", "box_avg_turnover"], ascending=[True, False])
+    hits["trade_date"] = trade_date
+    top_n = int(cfg.get("box.top_n", 100) or 100)
+    hits = hits.head(top_n)
+    title = f"箱体震荡 + 换手健康（做 T 备选）| 交易日 {trade_date}"
+    summary = (
+        f"{title}\n命中 {len(hits)} 只 · 按箱体位置升序（越贴箱底越靠前）\n"
+        f"口径：{window} 日箱体高度 {cfg.get('box.min_width')}~{cfg.get('box.max_width')}、"
+        f"净涨跌 ≤{cfg.get('box.max_net_chg')}、日均换手 "
+        f"{cfg.get('box.min_avg_turnover')}~{cfg.get('box.max_avg_turnover')}%、"
+        f"日均振幅 {cfg.get('box.min_avg_amplitude')}~{cfg.get('box.max_avg_amplitude')}%"
+    )
+    print_frame(
+        type("_R", (), {"hits": hits})(),
+        columns=BOX_REPORT_COLUMNS,
+        labels=HITS_LABELS,
+        float_formats=HITS_FORMATS,
+        summary=summary,
+    )
+    files = write_files(_BoxResult(trade_date, hits), cfg, prefix="box", sheet_name="箱体做T")
+    for path in files:
+        log.info("报告已写出：%s", path)
+    store.record_run("box", trade_date=trade_date, scanned=None, hits=len(hits))
+    store.close()
+    return 0
+
+
+class _BoxResult:
+    """让 write_files 复用（只需要 trade_date / hits / stats 三个属性）。"""
+
+    def __init__(self, trade_date, hits, stats=None):
+        self.trade_date = trade_date
+        self.hits = hits
+        self.stats = stats or {}
+
+
+BOX_REPORT_COLUMNS = (
+    "code",
+    "name",
+    "board",
+    "close",
+    "pct_chg",
+    "amount_yi",
+    "box_pos",
+    "box_width",
+    "box_high",
+    "box_low",
+    "box_avg_turnover",
+    "box_avg_amplitude",
+    "turnover",
+    "box_net_chg",
+    "box_days",
+)
+
+
+def _box_features_for_cache(store: Store, cfg: Config, trade_date: str):
+    """全市场箱体特征（不只命中），用来写每日缓存。"""
+    from .box import compute_box_features
+
+    window = int(cfg.get("box.window", 40) or 40)
+    bars = store.load_recent_bars(
+        calendar_days=window * 2 + 20,
+        columns=(
+            "close",
+            "high",
+            "low",
+            "turnover",
+            "amount",
+            "amplitude",
+            "pct_chg",
+            "volume",
+        ),
+    )
+    if bars is None or bars.empty:
+        return None
+    bars = bars[bars["date"].astype(str) <= str(trade_date)]
+    symbols = store.symbols_df()
+    st = []
+    if symbols is not None and not symbols.empty and "is_st" in symbols.columns:
+        st = [str(s) for s in symbols.loc[symbols["is_st"] == 1, "secid"].tolist()]
+    features = compute_box_features(bars, st_secids=st, cfg=cfg, window=window)
+    if features.empty or bars.empty:
+        return features
+    # 顺手把当日行情也带上（这样"只跑 box 没跑 scan"时网页/命令行也有价格可选）
+    latest = bars[bars["date"].astype(str) == str(trade_date)]
+    keep = [c for c in ("close", "pct_chg", "volume", "amount", "turnover") if c in latest.columns]
+    if keep:
+        day = latest[["secid"] + keep].drop_duplicates(subset=["secid"])
+        features = features.merge(day, on="secid", how="left")
+    return features
+
+
 def cmd_signals(cfg: Config, args: argparse.Namespace) -> int:
     """筛"MACD/KDJ 金叉、布林下轨"等指标信号，出终端表格 + CSV/XLSX。"""
     store = open_store(cfg)
@@ -742,6 +882,12 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
 
     args.trade_date = stats.trade_date
     rc = cmd_scan(cfg, args)
+    if bool(cfg.get("box.enabled", True)):
+        try:
+            rc = max(rc, cmd_box(cfg, args))
+        except Exception as exc:  # 箱体筛选失败不影响放量/信号报告
+            log.error("箱体筛选失败：%s", exc)
+            log.debug("详细堆栈", exc_info=True)
     if _signals_enabled(cfg, args):
         try:
             rc = max(rc, cmd_signals(cfg, args))
@@ -1023,6 +1169,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="指标来源：local=本地按日线算（默认，零请求）；api=拉麦蕊接口",
     )
 
+    p_box = sub.add_parser("box", help="筛箱体震荡 + 换手健康的票（做 T 备选池）")
+    p_box.add_argument("--trade-date", dest="trade_date", help="交易日 YYYY-MM-DD（默认最新）")
+
     p_scan = sub.add_parser("scan", help="用本地数据扫描放量（可回看历史某天）")
     p_scan.add_argument("--trade-date", dest="trade_date", help="要扫描的交易日 YYYY-MM-DD")
 
@@ -1101,6 +1250,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "update": cmd_update,
         "indicators": cmd_indicators,
         "scan": cmd_scan,
+        "box": cmd_box,
         "signals": cmd_signals,
         "hits": cmd_hits,
         "run": cmd_run,

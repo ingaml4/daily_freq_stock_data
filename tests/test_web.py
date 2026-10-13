@@ -522,6 +522,48 @@ def test_page_shows_latest_day_and_staleness_banner(tmp_path):
     store.close()
 
 
+def test_box_view_is_a_first_class_button(tmp_path):
+    """第五个按钮"箱体做T"：和放量/金叉同级，展示箱体列，按箱体位置升序。"""
+    _, store, date = _seed(tmp_path)
+    store.upsert_daily_signals(
+        [
+            {
+                "secid": "1.600000",
+                "date": date,
+                "close": 10.0,
+                "pct_chg": 0.3,
+                "volume": 100000.0,
+                "amount": 1.0e8,
+                "s_box_range": 1,
+                "box_pos": 0.25,
+                "box_width": 0.09,
+                "box_high": 10.9,
+                "box_low": 10.0,
+                "box_avg_turnover": 3.3,
+                "box_avg_amplitude": 3.1,
+                "box_days": 40,
+            }
+        ]
+    )
+    store.close()
+    cfg = make_cfg(tmp_path)
+    httpd = serve(lambda: open_store(cfg), host="127.0.0.1", port=0, blocking=False)
+    base = f"http://127.0.0.1:{httpd.server_port}"
+    try:
+        page = urllib.request.urlopen(f"{base}/signals/box_range", timeout=10).read().decode()
+        assert "箱体做T" in page  # 导航按钮
+        assert "箱体位置" in page and "日均换手%" in page
+        assert "600000" in page  # 命中的票出现在表里
+        payload = json.loads(
+            urllib.request.urlopen(f"{base}/api/signals?view=box_range", timeout=10).read()
+        )
+        assert payload["sort"] == "box_pos" and payload["order"] == "asc"
+        assert [r["code"] for r in payload["rows"]] == ["600000"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def test_every_sortable_column_sorts_server_side(tmp_path):
     """回归：每一列表头点下去都必须 200 且顺序正确。
 

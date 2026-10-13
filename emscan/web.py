@@ -72,6 +72,13 @@ VIEWS: Dict[str, Dict[str, str]] = {
         "sort": "boll_pos",
         "order": "asc",
     },
+    "box_range": {
+        "flag": "s_box_range",
+        "nav": "箱体做T",
+        "title": "箱体震荡 + 换手健康（做 T 备选：越贴箱底越靠前）",
+        "sort": "box_pos",
+        "order": "asc",
+    },
 }
 
 DEFAULT_VIEW = "vol_spike"
@@ -96,6 +103,12 @@ COLUMNS: Tuple[Tuple[str, str, Optional[str], bool], ...] = (
     ("kdj_k", "K", "{:.1f}", True),
     ("kdj_d", "D", "{:.1f}", True),
     ("kdj_j", "J", "{:.1f}", True),
+    ("box_pos", "箱体位置", "{:.2f}", True),
+    ("box_width", "箱体高度", "{:.1%}", True),
+    ("box_high", "箱顶", "{:.2f}", True),
+    ("box_low", "箱底", "{:.2f}", True),
+    ("box_avg_turnover", "日均换手%", "{:.2f}", True),
+    ("box_avg_amplitude", "日均振幅%", "{:.2f}", True),
     ("signals_cn", "命中信号", None, False),
 )
 
@@ -344,7 +357,12 @@ def build_context(
         ctx.stale_reason = explain_stale(str(ctx.date), today, update_times)
     ctx.cache_written = _cache_written_at(store, str(ctx.date))
 
-    where = ["d.date = ?", "COALESCE(d.%s, 0) = 1" % spec["flag"]]
+    where = [
+        "d.date = ?",
+        "COALESCE(d.%s, 0) = 1" % spec["flag"],
+        "COALESCE(s.is_st, 0) = 0",  # ST/退市不参与（网页上所有视图统一）
+        "COALESCE(d.volume, 1) > 0",  # 明确停牌（volume=0）不显示；NULL 视为"没记录"放行
+    ]
     params: List[Any] = [ctx.date]
     if ctx.query:
         like = "%" + ctx.query.upper() + "%"

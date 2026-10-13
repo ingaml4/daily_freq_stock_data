@@ -69,6 +69,24 @@ mairui:
 #   enabled: false
 #   webhook: {type: feishu, url: ""}
 
+# 箱体震荡 + 换手健康（做 T 备选池）——网页第 5 个按钮"箱体做T"
+# box:
+#   enabled: true
+#   window: 40                 # 回看多少交易日（40 ≈ 2 个月）
+#   min_width: 0.06            # 箱体相对高度下限（(箱顶-箱底)/箱底）
+#   max_width: 0.35            # 上限（太宽就不是箱体）
+#   max_net_chg: 0.12          # 窗口内净涨跌幅上限（超过=在趋势里）
+#   max_ma_gap: 0.04           # |MA5-MA20|/MA20 上限（均线缠绕）
+#   min_avg_turnover: 1.0      # 日均换手率下限（%）
+#   max_avg_turnover: 15.0     # 上限（%）
+#   max_turnover_cv: 1.0       # 换手率变异系数上限（越小越稳定）
+#   min_avg_amplitude: 2.0     # 日均振幅下限（%）——太小做不出差价
+#   max_avg_amplitude: 9.0
+#   max_extreme_days: 2        # 窗口内 |涨跌幅|>=9.5% 的天数上限
+#   min_amount: 30000000       # 当日成交额下限（元）
+#   min_valid_days: 35         # 窗口内有效交易日下限
+#   top_n: 100
+
 # 网页端：python3 -m emscan web（四个查询按钮 + 可排序表格 + 代码跳雪球）
 # web:
 #   host: 127.0.0.1     # 只本机；对外暴露改成 0.0.0.0 并设置 token / 用反向代理加认证

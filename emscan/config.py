@@ -104,6 +104,24 @@ DEFAULTS: Dict[str, Any] = {
         # 当天指标还没发布时，是否允许退回用最近一个交易日出报告（默认允许，日志会写明）
         "require_trade_date": False,
     },
+    # 箱体震荡 + 换手健康（做 T 备选池）——判定口径见 emscan/box.py 顶部注释
+    "box": {
+        "enabled": True,
+        "window": 40,  # 回看多少个交易日（40 ≈ 2 个月）
+        "min_width": 0.06,  # 箱体相对高度下限（(箱顶-箱底)/箱底）
+        "max_width": 0.35,  # 上限（太宽就不是箱体了）
+        "max_net_chg": 0.12,  # 窗口内净涨跌幅绝对值上限（超过就是在趋势里）
+        "max_ma_gap": 0.04,  # |MA5-MA20|/MA20 上限（均线缠绕）
+        "min_avg_turnover": 1.0,  # 日均换手率下限（%）——太低没法进出
+        "max_avg_turnover": 15.0,  # 上限（%）——太高是妖股博弈
+        "max_turnover_cv": 1.0,  # 换手率变异系数上限（越小越"健康稳定"）
+        "min_avg_amplitude": 2.0,  # 日均振幅下限（%）——太小做不出差价
+        "max_avg_amplitude": 9.0,  # 上限（%）
+        "max_extreme_days": 2,  # 窗口内 |涨跌幅|>=9.5% 的天数上限（连板票不适合做 T）
+        "min_amount": 30_000_000,  # 当日成交额下限（元）
+        "min_valid_days": 35,  # 窗口内有效交易日下限（停牌剔除）
+        "top_n": 100,
+    },
     "web": {
         # 网页端：python3 -m emscan web
         "host": "127.0.0.1",  # 只本机可访问；要对外就改 0.0.0.0（记得配 token / 反代认证）

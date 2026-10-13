@@ -27,9 +27,31 @@ from .mairui import BAR_FIELDS, INDICATOR_MAP
 log = logging.getLogger(__name__)
 
 # 表结构版本号：改 SCHEMA / 迁移逻辑就 +1（init_schema 靠它决定要不要重建）
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
-SCHEMA = """
+DAILY_SIGNALS_VIEW = """CREATE VIEW IF NOT EXISTS daily_signals_named AS
+SELECT
+    *,
+    RTRIM(
+        CASE WHEN s_vol_spike        THEN 'vol_spike,'        ELSE '' END ||
+        CASE WHEN s_macd_golden      THEN 'macd_golden,'      ELSE '' END ||
+        CASE WHEN s_kdj_golden       THEN 'kdj_golden,'       ELSE '' END ||
+        CASE WHEN s_boll_break_lower THEN 'boll_break_lower,' ELSE '' END ||
+        CASE WHEN s_boll_lower       THEN 'boll_lower,'       ELSE '' END ||
+        CASE WHEN s_ma_golden        THEN 'ma_golden,'        ELSE '' END ||
+        CASE WHEN s_macd_dead        THEN 'macd_dead,'        ELSE '' END ||
+        CASE WHEN s_kdj_dead         THEN 'kdj_dead,'         ELSE '' END ||
+        CASE WHEN s_ma_dead          THEN 'ma_dead,'          ELSE '' END ||
+        CASE WHEN s_boll_upper       THEN 'boll_upper,'       ELSE '' END ||
+        CASE WHEN s_boll_break_upper THEN 'boll_break_upper,' ELSE '' END ||
+        CASE WHEN s_box_range        THEN 'box_range,'         ELSE '' END,
+        ','
+    ) AS signals
+FROM daily_signals;
+"""
+
+SCHEMA = (
+    """
 CREATE TABLE IF NOT EXISTS symbols (
     secid      TEXT PRIMARY KEY,
     code       TEXT NOT NULL,
@@ -123,11 +145,24 @@ CREATE TABLE IF NOT EXISTS daily_signals (
     ma10               REAL,
     ma20               REAL,
     ma60               REAL,
+    -- 箱体震荡（做 T 备选池）指标
+    box_high           REAL,
+    box_low            REAL,
+    box_width          REAL,
+    box_pos            REAL,
+    box_net_chg        REAL,
+    box_ma_gap         REAL,
+    box_avg_turnover   REAL,
+    box_turnover_cv    REAL,
+    box_avg_amplitude  REAL,
+    box_extreme_days   INTEGER,
+    box_days           INTEGER,
     -- 信号标记（1=当日命中，0=未命中，NULL=这次没算）
     s_vol_spike        INTEGER,
     s_macd_golden      INTEGER,
     s_kdj_golden       INTEGER,
     s_boll_break_lower INTEGER,
+    s_box_range        INTEGER,
     s_macd_dead        INTEGER,
     s_kdj_dead         INTEGER,
     s_ma_golden        INTEGER,
@@ -141,25 +176,9 @@ CREATE TABLE IF NOT EXISTS daily_signals (
 
 CREATE INDEX IF NOT EXISTS idx_daily_signals_date ON daily_signals(date);
 
--- 把 0/1 标记拼成"命中规则名"的视图：任何 SQL 客户端直接 select * from daily_signals_named
-CREATE VIEW IF NOT EXISTS daily_signals_named AS
-SELECT
-    *,
-    RTRIM(
-        CASE WHEN s_vol_spike        THEN 'vol_spike,'        ELSE '' END ||
-        CASE WHEN s_macd_golden      THEN 'macd_golden,'      ELSE '' END ||
-        CASE WHEN s_kdj_golden       THEN 'kdj_golden,'       ELSE '' END ||
-        CASE WHEN s_boll_break_lower THEN 'boll_break_lower,' ELSE '' END ||
-        CASE WHEN s_boll_lower       THEN 'boll_lower,'       ELSE '' END ||
-        CASE WHEN s_ma_golden        THEN 'ma_golden,'        ELSE '' END ||
-        CASE WHEN s_macd_dead        THEN 'macd_dead,'        ELSE '' END ||
-        CASE WHEN s_kdj_dead         THEN 'kdj_dead,'         ELSE '' END ||
-        CASE WHEN s_ma_dead          THEN 'ma_dead,'          ELSE '' END ||
-        CASE WHEN s_boll_upper       THEN 'boll_upper,'       ELSE '' END ||
-        CASE WHEN s_boll_break_upper THEN 'boll_break_upper,' ELSE '' END,
-        ','
-    ) AS signals
-FROM daily_signals;
+"""
+    + DAILY_SIGNALS_VIEW
+    + """
 
 CREATE TABLE IF NOT EXISTS trading_days (
     date TEXT PRIMARY KEY
@@ -184,6 +203,7 @@ CREATE TABLE IF NOT EXISTS runs (
     note       TEXT
 );
 """
+)
 
 BAR_INSERT = (
     "INSERT OR REPLACE INTO bars "
@@ -254,10 +274,22 @@ DAILY_SIGNAL_COLUMNS: tuple = (
     "ma10",
     "ma20",
     "ma60",
+    "box_high",
+    "box_low",
+    "box_width",
+    "box_pos",
+    "box_net_chg",
+    "box_ma_gap",
+    "box_avg_turnover",
+    "box_turnover_cv",
+    "box_avg_amplitude",
+    "box_extreme_days",
+    "box_days",
     "s_vol_spike",
     "s_macd_golden",
     "s_kdj_golden",
     "s_boll_break_lower",
+    "s_box_range",
     "s_macd_dead",
     "s_kdj_dead",
     "s_ma_golden",
@@ -366,6 +398,19 @@ class Store:
             if column not in existing:
                 log.info("行情库升级：symbols 表新增列 %s", column)
                 self.conn.execute(sql)
+        # daily_signals 也会随版本加列：表里有、代码里没有的都补上（ALTER 幂等）
+        have = {row["name"] for row in self.conn.execute("PRAGMA table_info(daily_signals)")}
+        for column in DAILY_SIGNAL_COLUMNS:
+            if column in have:
+                continue
+            kind = "INTEGER" if column.startswith("s_") or column == "box_days" else "REAL"
+            if column in ("vol_signal", "computed_at"):
+                kind = "TEXT"
+            log.info("行情库升级：daily_signals 表新增列 %s", column)
+            self.conn.execute(f"ALTER TABLE daily_signals ADD COLUMN {column} {kind}")
+        # 视图要跟着新列走：VIEW 是 SELECT *，但 signals 文本列要重新拼
+        self.conn.execute("DROP VIEW IF EXISTS daily_signals_named")
+        self.conn.execute(DAILY_SIGNALS_VIEW)
 
     def close(self) -> None:
         if self._conn is not None:
