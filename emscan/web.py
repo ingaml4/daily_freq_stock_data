@@ -20,11 +20,11 @@
 
 from __future__ import annotations
 
-import html
-import gzip
 import base64
+import gzip
 import hashlib
 import hmac
+import html
 import json
 import logging
 import threading

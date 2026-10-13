@@ -402,6 +402,29 @@ def parse_quote_payload(payload: Any, secid_hint: Optional[str] = None) -> List[
     return rows
 
 
+def align_quotes_by_position(payload: Any, secids: Sequence[str]) -> List[Dict[str, Any]]:
+    """返回体里没有 ``dm`` 时，按"请求顺序"把报价对齐到 secid。
+
+    ``hsrl/ssjy_more`` 的文档字段表里并没有 ``dm``（只列了 p/o/h/l/cje/v/…），
+    实测有的证书会带、有的不带。不带时只能按顺序对齐（接口按请求顺序返回），
+    数量对不上就放弃（让调用方退回到逐只抓，宁慢不错）。
+    """
+    items = _as_items(payload)
+    if not items:
+        return []
+    if any(to_text(item.get("dm")) for item in items):
+        return parse_quote_payload(items)
+    if len(items) != len(secids):
+        log.warning(
+            "多股报价缺少 dm 且数量对不上（%s vs %s），退回逐只抓取", len(items), len(secids)
+        )
+        return []
+    rows: List[Dict[str, Any]] = []
+    for item, secid in zip(items, secids):
+        rows.extend(parse_quote_payload(item, secid_hint=secid))
+    return rows
+
+
 def parse_kline_payload(
     payload: Any,
     secid: str,
@@ -691,17 +714,21 @@ class MairuiClient:
         return parse_quote_payload(payload)
 
     def fetch_quote_multi(self, secids: Sequence[str]) -> List[Dict[str, Any]]:
-        """多股实时行情（``hsrl/ssjy_more``，一次最多 20 只）。"""
+        """多股实时行情（``hsrl/ssjy_more``，一次最多 20 只）—— **非 Pro 档也能用**。
+
+        返回体带 ``dm`` 就按代码对齐；不带（文档字段表里确实没有 dm）就按请求顺序对齐。
+        """
         licence = self._require_licence()
         rows: List[Dict[str, Any]] = []
-        codes = [str(secid).split(".", 1)[1] for secid in secids]
-        for start in range(0, len(codes), self.multi_batch):
-            batch = codes[start : start + self.multi_batch]
+        items = list(secids)
+        for start in range(0, len(items), self.multi_batch):
+            batch = items[start : start + self.multi_batch]
+            codes = [str(secid).split(".", 1)[1] for secid in batch]
             payload = self._get_json(
                 self._url(PATH_QUOTE_MORE.format(licence=licence)),
-                {"stock_codes": ",".join(batch)},
+                {"stock_codes": ",".join(codes)},
             )
-            rows.extend(parse_quote_payload(payload))
+            rows.extend(align_quotes_by_position(payload, batch))
         return rows
 
     def fetch_quote_one(self, secid: str) -> List[Dict[str, Any]]:
@@ -716,41 +743,39 @@ class MairuiClient:
         secids: Optional[Sequence[str]] = None,
         mode: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """拉当日全市场快照。
+        """拉当日快照。**默认不碰 Pro 专属的全市场接口。**
 
-        三种取数方式（``mairui.spot_mode`` 可强制指定，默认 ``auto`` 逐级降级）：
+        取数方式（``mairui.spot_mode`` 可强制指定，默认 ``auto``）：
 
-        * ``all``    —— ``hsrl/real/all``，一次拿全市场（最省；文档注明需包年/钻石版
-          或 Quant Pro 增强包，且每分钟只能请求 1 次）。
-        * ``more``   —— ``hsrl/ssjy_more``，一次 20 只，全市场约 300 次请求。
-        * ``single`` —— ``hsrl/ssjy``，逐只抓，最慢但权限要求最低。
+        * ``auto``   —— 先多股（``hsrl/ssjy_more``，一次 20 只，约 260 次请求拿全市场），
+          拿不到再逐只（``hsrl/ssjy``）；**不试全市场接口**（那个要包年/钻石/
+          Quant Pro 档位，没权限会 429，白等一轮）。
+        * ``more`` / ``single`` —— 只走其中一种。
+        * ``all``    —— ``hsrl/real/all``，一次拿全市场（最省，但**必须**证书含
+          "全市场"权限，且每分钟只能 1 次）；只有你确认有这个权限时才用。
         """
         chosen = (mode or self.spot_mode or "auto").lower()
-        if chosen in ("auto", "all"):
-            try:
-                rows = self.fetch_quote_all()
-                if rows:
-                    return rows
-                log.warning("全市场快照接口返回空数据")
-            except MairuiError as exc:
-                if chosen == "all":
-                    raise
-                log.warning("全市场快照接口不可用（%s），降级到多股/单股方式", exc)
-            if chosen == "all":
-                return []
+        if chosen == "all":
+            return self.fetch_quote_all()
 
         if not secids:
-            return []
+            # 没给股票池（例如只想探活）：能试的只有全市场接口
+            try:
+                return self.fetch_quote_all()
+            except MairuiError as exc:
+                log.warning("全市场快照接口不可用（%s）；没给股票池时无法降级", exc)
+                return []
+
         if chosen in ("auto", "more"):
             try:
                 rows = self.fetch_quote_multi(secids)
                 if rows:
                     return rows
-                log.warning("多股快照接口返回空数据")
+                log.warning("多股快照接口返回空数据，改逐只抓取")
             except MairuiError as exc:
                 if chosen == "more":
                     raise
-                log.warning("多股快照接口不可用（%s），降级到逐只抓取", exc)
+                log.warning("多股快照接口不可用（%s），改逐只抓取", exc)
 
         return self._fetch_quote_each(secids)
 

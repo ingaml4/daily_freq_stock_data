@@ -7,7 +7,7 @@
 | 用途 | 接口 | 本项目里的位置 |
 | --- | --- | --- |
 | 股票列表（代码 + 名称） | `GET /hslt/list/{licence}` | `mairui.fetch_universe()` |
-| 当日全市场行情快照 | `GET /hsrl/real/all/{licence}` | `mairui.fetch_spot()` 方式 `all` |
+| 当日全市场行情快照（**Pro/包年档专属**） | `GET /hsrl/real/all/{licence}` | `mairui.fetch_spot()` 方式 `all`（默认不用） |
 | 当日多股行情（≤20 只） | `GET /hsrl/ssjy_more/{licence}?stock_codes=a,b,…` | 方式 `more` |
 | 当日单股行情 | `GET /hsrl/ssjy/{code}/{licence}` | 方式 `single` |
 | 历史日线 | `GET /hsstock/history/{code}.{MKT}/d/{adjust}/{licence}` | `mairui.fetch_kline_many()` |
@@ -74,14 +74,20 @@ GET https://api.mairuiapi.com/hslt/list/{licence}
 | `t` | 更新时间 | 字符串 | `ts`（用来推交易日） |
 | `pe` `sjl` `zs` `fm` `zdf60` `zdfnc` | 市盈率/市净率/涨速/5分钟涨跌/60日/年初至今 | | 未落库 |
 
-* **全市场**：`GET /hsrl/real/all/{licence}`，一次拿全市场（实测 5919 条，**含北交所**，
-  但**没有股票名称**）。每分钟限 1 次。
+* **全市场（Pro/包年档专属，默认不用）**：`GET /hsrl/real/all/{licence}`，一次拿全市场
+  （实测 5919 条，**含北交所**，但**没有股票名称**）。每分钟限 1 次。
+  基础/包月档调它只会拿到 `429`（实测），所以本项目默认 `spot_mode: auto` **不试它**，
+  直接走下面两种：
 * **多股**：`GET /hsrl/ssjy_more/{licence}?stock_codes=000001,600519,…`，一次最多 20 只。
   文档字段表里换手率叫 `tr`、成交量叫 `tv`；实测返回体与单股一致（`hs`/`v`）——
   本项目两种字段名都认。
 * **单股**：`GET /hsrl/ssjy/{code}/{licence}`，返回**单个对象**（不是数组）。
 
-`mairui.spot_mode`（默认 `auto`）决定取数方式：`all` 拿不到就退到 `more`，再退到 `single`（逐只抓）。
+`mairui.spot_mode` 决定取数方式：
+`auto`（默认）= `more`（多股，20 只/次）→ `single`（逐只），**不试 `all`**；
+`all` 只有证书含"全市场"权限时才该用（省请求，但没权限就 429）。
+注意 `ssjy_more` 的返回体**文档字段表里没有 `dm`**：有时带、有时不带，
+本项目不带时按"请求顺序"对齐（数量对不上就退回逐只抓，宁慢不错）。
 
 ## 3. 历史日线
 

@@ -26,7 +26,9 @@ DEFAULTS: Dict[str, Any] = {
         "sleep": 0.05,
         # 证书限流（次/分钟）：按文档填 300（基础）/1000（包月）/3000（包年）/6000（钻石）
         "rate_limit_per_min": 300,
-        # 快照取数方式：auto=全市场→多股→单股逐级降级；也可强制 all/more/single
+        # 快照取数方式：
+        #   auto（默认）= 多股(≤20 只/次) → 逐只；不试全市场接口（那个要 Pro/包年档）
+        #   all = hsrl/real/all 一次拿全市场（仅证书含"全市场"权限时可用）
         "spot_mode": "auto",
         # 多股快照一次最多 20 只（接口上限）
         "multi_batch": 20,

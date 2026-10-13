@@ -6,6 +6,7 @@ from emscan.mairui import (
     MairuiClient,
     MairuiError,
     RateLimiter,
+    align_quotes_by_position,
     board_of,
     dm_of,
     error_message,
@@ -234,6 +235,66 @@ def test_parse_quote_payload_accepts_tr_field_alias():
     """ssjy_more 文档里换手率字段叫 tr，这里要兼容。"""
     rows = parse_quote_payload([{"dm": "600519", "p": 10.0, "tr": 1.5, "v": 100}])
     assert rows[0]["turnover"] == 1.5
+
+
+def test_align_quotes_by_position_without_dm():
+    """ssjy_more 的返回体可能没有 dm：按请求顺序对齐；数量对不上就放弃。"""
+    payload = [{"p": 10.0, "yc": 9.9, "v": 100}, {"p": 20.0, "yc": 19.9, "v": 200}]
+    rows = align_quotes_by_position(payload, ["1.600000", "0.000001"])
+    assert [row["secid"] for row in rows] == ["1.600000", "0.000001"]
+    assert rows[0]["close"] == 10.0 and rows[1]["close"] == 20.0
+    # 数量对不上 -> 放弃（调用方会退回逐只抓）
+    assert align_quotes_by_position(payload, ["1.600000"]) == []
+    # 带 dm 就按代码走
+    rows = align_quotes_by_position([{"dm": "600519", "p": 1.0}], ["1.600000"])
+    assert rows[0]["secid"] == "1.600519"
+
+
+def test_fetch_spot_default_chain_skips_pro_whole_market():
+    """默认 auto：多股 → 逐只，**不碰** Pro 专属的全市场接口。"""
+
+    class Probe(MairuiClient):
+        def __init__(self, more_rows, single_rows):
+            super().__init__("LICENCE-TEST")
+            self.calls = []
+            self._more = more_rows
+            self._single = single_rows
+
+        def fetch_quote_all(self):
+            self.calls.append("all")
+            return [{"secid": "1.600000"}]
+
+        def fetch_quote_multi(self, secids):
+            self.calls.append("more")
+            return self._more
+
+        def fetch_quote_one(self, secid):
+            self.calls.append("single:%s" % secid)
+            return self._single
+
+    ok = Probe([{"secid": "1.600000"}], [{"secid": "1.600000"}])
+    assert ok.fetch_spot(["1.600000"]) and ok.calls == ["more"]
+
+    # 多股拿不到 -> 退逐只，且始终没碰 all
+    fallback = Probe([], [{"secid": "1.600000"}])
+    assert fallback.fetch_spot(["1.600000"])
+    assert fallback.calls == ["more", "single:1.600000"]
+
+    # 显式指定 all 才走全市场接口（给有 Pro/包年权限的证书用）
+    forced = Probe([{"secid": "1.600000"}], [])
+    assert forced.fetch_spot(["1.600000"], mode="all")
+    assert forced.calls == ["all"]
+
+    # 强制 more 时，接口报错会直接把错抛出来（不静默降级）；
+    # 只是"返回空"仍会退到逐只（空数据多半是临时抖动，不是权限问题）
+    class Boom(Probe):
+        def fetch_quote_multi(self, secids):
+            self.calls.append("more")
+            raise MairuiError("429 too many requests")
+
+    strict = Boom([], [{"secid": "1.600000"}])
+    with pytest.raises(MairuiError):
+        strict.fetch_spot(["1.600000"], mode="more")
 
 
 def test_parse_kline_payload_derives_indicators():

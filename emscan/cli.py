@@ -817,6 +817,11 @@ def cmd_check(cfg: Config, args: argparse.Namespace) -> int:
     )
     print(f"  参与扫描板块：{', '.join(cfg.get('universe.boards'))}")
     print(f"  自愈窗口：最近 {cfg.get('reconcile_calendar_days')} 个自然日")
+    print(
+        f"  快照取数：{cfg.get('mairui.spot_mode', 'auto')}"
+        f"（多股一批 {cfg.get('mairui.multi_batch', 20)} 只；all=全市场接口，需 Pro/包年档）"
+        f" · 限频 {cfg.get('mairui.rate_limit_per_min')} 次/分钟"
+    )
     print(f"  信号规则：{', '.join(normalize_rules(cfg.get('signals.rules')))}")
     store.close()
 
@@ -827,12 +832,13 @@ def cmd_check(cfg: Config, args: argparse.Namespace) -> int:
             universe = client.fetch_universe()
             print(f"① 股票列表 OK：{len(universe)} 只，样例 {universe[:2]}")
             sample_secid = universe[0]["secid"] if universe else "1.600519"
-            spot = client.fetch_spot(mode="all")
+            sample_secids = [row["secid"] for row in universe[:5]] or [sample_secid]
+            print(f"② 当日快照（取数方式 {cfg.get('mairui.spot_mode', 'auto')}）：", end=" ")
+            spot = client.fetch_spot(sample_secids)
             if spot:
-                print(f"② 全市场快照 OK：{len(spot)} 条，行情日期 {spot_trade_date(spot)}")
+                print(f"OK，{len(spot)} 条，行情日期 {spot_trade_date(spot)}")
             else:
-                spot = client.fetch_quote_one(sample_secid)
-                print(f"② 全市场快照不可用（证书档位可能不含），单股快照 OK：{spot[:1]}")
+                print("拿不到（检查证书档位/网络）")
             if spot:
                 sample = spot[0]
                 print(

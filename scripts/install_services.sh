@@ -32,6 +32,7 @@ PYTHON_BIN=""
 USER_MODE="false"
 DRY_RUN="false"
 DO_ENABLE="true"
+INITIAL_SYNC="true"
 UNINSTALL="false"
 PURGE="false"
 SYSTEMD_DIR=""
@@ -65,6 +66,7 @@ usage() {
   --user                免 root：装成用户级服务（~/.config/systemd/user），用 systemctl --user 管理
   --dry-run             只打印将要生成的文件与命令，不写任何东西、不动 systemd
   --no-enable           只生成单元文件，不执行 systemctl enable/start（方便先检查）
+  --no-initial-sync     装完不立刻触发首次全量同步（默认会触发，后台跑）
   --uninstall           停止并删除服务（环境文件默认保留）
   --purge               配合 --uninstall：连环境文件一起删
   --systemd-dir <目录>  高级：单元文件输出目录（默认 /etc/systemd/system 或用户目录）
@@ -93,6 +95,8 @@ while [ $# -gt 0 ]; do
         --user)              USER_MODE="true"; shift ;;
         --dry-run)           DRY_RUN="true"; shift ;;
         --no-enable)         DO_ENABLE="false"; shift ;;
+        --initial-sync)      INITIAL_SYNC="true"; shift ;;
+        --no-initial-sync)   INITIAL_SYNC="false"; shift ;;
         --uninstall)         UNINSTALL="true"; shift ;;
         --purge)             PURGE="true"; shift ;;
         -h|--help)           usage; exit 0 ;;
@@ -290,6 +294,7 @@ cat <<PLAN
   麦蕊 licence    : $(mask "${LICENCE}")
   网页登录口令    : $(mask "${PASSWORD}")$([ "${PASSWORD_GENERATED}" = "true" ] && echo "（本次自动生成）")
   自动 enable     : ${DO_ENABLE}
+  首次全量同步    : ${INITIAL_SYNC}（装完在后台触发一次 emscan run）
 PLAN
 
 if [ "${DRY_RUN}" = "true" ]; then
@@ -311,7 +316,9 @@ if [ "${DRY_RUN}" = "true" ]; then
   install -m 600 <env> ${ENV_FILE}
   install -m 644 <unit> ${DAILY_UNIT} ${TIMER_UNIT} ${WEB_UNIT}
   ${SYSTEMCTL[*]} daemon-reload
-  ${SYSTEMCTL[*]} enable --now emscan-daily.timer emscan-web.service
+  ${SYSTEMCTL[*]} enable emscan-daily.timer emscan-web.service
+  ${SYSTEMCTL[*]} restart emscan-web.service emscan-daily.timer
+  ${SYSTEMCTL[*]} start --no-block emscan-daily.service   # 首次全量同步（后台）
 CMDS
     log ""
     log "（--dry-run 结束，什么都没改）"
@@ -386,6 +393,18 @@ if [ "${DO_ENABLE}" = "true" ]; then
     if [ "${PASSWORD_GENERATED}" = "true" ]; then
         log "  网页登录口令（自动生成，请保存；也可在 ${ENV_FILE} 里查看）：${PASSWORD}"
     fi
+    if [ "${INITIAL_SYNC}" = "true" ]; then
+        step "首次全量同步（后台跑，别在这等）"
+        log "  触发 emscan run：拉全市场股票列表 + 历史日线 + 日频指标，并出第一份报告"
+        log "  首次大约 1 小时（300 次/分档位）；档位越高越快，中途断电/重启也能续，不会重复抓"
+        run_priv "${SYSTEMCTL[@]}" start --no-block emscan-daily.service || true
+        cat <<PROGRESS
+  看进度（任选）：
+    journalctl -u emscan-daily -f$([ "${USER_MODE}" = "true" ] && echo " --user")
+    tail -f ${PROJECT_DIR}/logs/emscan.log
+    cd ${PROJECT_DIR} && python3 -m emscan check        # 看库里已经有多少行
+PROGRESS
+    fi
 else
     step "已生成单元文件（--no-enable：未执行 systemctl）"
     cat <<CMDS
@@ -403,8 +422,8 @@ cat <<EOF
   # 看日志（网页端 / 每日任务）
   journalctl -u emscan-web -n 50 --no-pager$([ "${USER_MODE}" = "true" ] && echo " --user")
   journalctl -u emscan-daily -n 80 --no-pager$([ "${USER_MODE}" = "true" ] && echo " --user")
-  # 立刻手动跑一次每日任务（看效果）
-  ${SYSTEMCTL[*]} start emscan-daily.service
+  # 立刻手动跑一次（全量同步 + 报告）；--no-block = 后台跑，不占着终端
+  ${SYSTEMCTL[*]} start --no-block emscan-daily.service
   # 网页端
   浏览器打开 http://${WEB_HOST}:${WEB_PORT}/        （要求用口令登录；口令见 ${ENV_FILE}）\n  # 命令行/脚本可以用 Basic 认证： curl -u ":<口令>" http://${WEB_HOST}:${WEB_PORT}/api/signals
   # 改配置后重启网页端
