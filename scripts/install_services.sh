@@ -214,6 +214,9 @@ else
     render_service() { render "$1"; }
 fi
 
+# 这些变量由脚本自己管理；重装时环境文件里"其它"变量会原样保留，避免冲掉你手工加的配置
+MANAGED_ENV_KEYS="MAIRUI_LICENCE EMSCAN_WEB_HOST EMSCAN_WEB_PORT EMSCAN_WEB_PASSWORD EMSCAN_WEB_TOKEN TZ"
+
 render_env() {
     cat <<ENV
 # emscan 环境文件（由 ${SCRIPT_NAME} 生成，权限 600，请勿提交进 git）
@@ -228,6 +231,15 @@ EMSCAN_WEB_PASSWORD=${PASSWORD}
 # 时区固定东八区（脚本内部也会再固定一次）
 TZ=Asia/Shanghai
 ENV
+    if [ -f "${ENV_FILE}" ]; then
+        local extra
+        extra="$(grep -vE "^[[:space:]]*(export[[:space:]]+)?($(echo "${MANAGED_ENV_KEYS}" | tr ' ' '|'))=" \
+            "${ENV_FILE}" 2>/dev/null | grep -vE '^[[:space:]]*(#|$)' || true)"
+        if [ -n "${extra}" ]; then
+            printf '\n# ↓ 你自己加的变量（重装时原样保留）\n'
+            printf '%s\n' "${extra}"
+        fi
+    fi
 }
 
 # ---------------------------------------------------------------- 卸载
@@ -348,7 +360,11 @@ fi
 if [ "${DO_ENABLE}" = "true" ]; then
     step "enable + 启动"
     run_priv "${SYSTEMCTL[@]}" daemon-reload
-    run_priv "${SYSTEMCTL[@]}" enable --now emscan-daily.timer emscan-web.service
+    run_priv "${SYSTEMCTL[@]}" enable emscan-daily.timer emscan-web.service
+    # 必须 restart：systemd 只在重启时重新读取 EnvironmentFile，
+    # 所以"改了 --web-host/口令后重跑本脚本"能立刻生效（enable --now 对已运行的服务不会重启）
+    run_priv "${SYSTEMCTL[@]}" restart emscan-web.service
+    run_priv "${SYSTEMCTL[@]}" restart emscan-daily.timer
     run_priv "${SYSTEMCTL[@]}" --no-pager status emscan-daily.timer emscan-web.service 2>&1 |
         sed -n '1,24p' || true
     if [ "${USER_MODE}" = "true" ]; then
