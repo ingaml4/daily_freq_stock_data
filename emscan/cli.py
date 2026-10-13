@@ -63,7 +63,7 @@ from .signals import (
     normalize_rules,
 )
 from .store import Store
-from .tzutil import ensure_env_tz, now_hm, shift
+from .tzutil import describe, ensure_env_tz, now_hm, shift
 from .tzutil import today as tz_today
 
 log = logging.getLogger("emscan")
@@ -805,7 +805,23 @@ def cmd_check(cfg: Config, args: argparse.Namespace) -> int:
     print(
         f"配置文件：{cfg.source if cfg.source else '（使用内置默认值，可用 MAIRUI_LICENCE 环境变量）'}"
     )
-    print(f"工作目录：{cfg.root}（当前东八区日期 {tz_today()}）")
+    zone = describe()
+    print(f"工作目录：{cfg.root}")
+    print(
+        f"时间：系统 {zone['system_time']} {zone['system_tz']}"
+        f"（TZ={zone['system_tz_name']}，偏移 {zone['system_offset_hours']:+.1f} 小时）"
+        f" · 本应用按东八区 {zone['app_time']}（{zone['app_zone']}"
+        f"，偏移 {zone['app_offset_hours']:+.1f} 小时）"
+    )
+    print(
+        f"      （同一时刻 UTC {zone['utc_now']}；"
+        f"交易日/数据日期一律按东八区判断，与系统时区无关；要改时区用 EMSCAN_TZ）"
+    )
+    if abs(float(zone["system_offset_hours"]) - 8.0) > 0.01:
+        print(
+            f"      ⚠ 你的系统时区不是东八区（差 {8.0 - float(zone['system_offset_hours']):+.1f} 小时）："
+            f"本应用不受影响，但你手工看 cron 日志/日期时注意换算"
+        )
     licence = str(cfg.get("mairui.licence") or "")
     masked = f"{licence[:6]}…{licence[-4:]}" if len(licence) > 12 else ("已配置" if licence else "")
     print(
