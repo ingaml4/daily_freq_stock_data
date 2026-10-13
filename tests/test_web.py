@@ -385,13 +385,12 @@ def test_http_server_serves_pages_and_json(tmp_path):
             body = resp.read().decode("utf-8")
             assert resp.status == 200 and "放量" in body
             assert "xueqiu.com/S/" in body
-        # 视图 + 服务器端排序
-        with urllib.request.urlopen(
-            f"{base}/signals/macd_golden?date={date}&sort=pct_chg&order=asc", timeout=10
-        ) as resp:
+        # 视图：页面只认"最新一天 + 默认排序"（排序在浏览器里做，URL 参数不再生效）
+        with urllib.request.urlopen(f"{base}/signals/macd_golden", timeout=10) as resp:
             body = resp.read().decode("utf-8")
-            first = body.split("<tbody>")[1].split("<tr>")[1]
-            assert "000933" in first  # -3.5% 排第一
+            assert resp.status == 200
+            sids = re.findall(r'<tr data-sid="([^"]+)"', body)
+            assert sids and sids[0] == "1.601058"  # 默认成交额降序：9 亿 > 2 亿
         # JSON 接口
         with urllib.request.urlopen(
             f"{base}/api/signals?view=kdj_golden&limit=1", timeout=10
@@ -562,6 +561,29 @@ def test_box_view_is_a_first_class_button(tmp_path):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_table_has_pagination_controls(tmp_path):
+    """分页：表上/卡片下各一条分页栏，每页 10/20/50/100 可选，默认页大小可配。"""
+    _, store, date = _seed(tmp_path)
+    ctx = build_context(store, view="vol_spike", date=date)
+    page = render_html(ctx, page_size=50)
+    # 两条分页栏（表格上方 / 卡片下方各一），四档每页行数
+    assert page.count('class="pager"') == 2
+    assert page.count('class="pg-size') >= 8  # 两栏 × 四档
+    for size in ("10", "20", "50", "100"):
+        assert f'data-size="{size}"' in page
+    assert 'data-size="50" data-size' not in page
+    assert (
+        '" active" data-size="50"' in page.replace('class="pg-size active"', '" active"')
+        or "active" in page
+    )
+    # 分页要能对上表格行与移动端卡片（同一 sid）
+    assert page.count('data-sid="') == 2 * len(ctx.rows)
+    # JS 里的分页参数被替换成了真实值
+    assert "[10,20,50,100]" in page and "var DEFAULT_SIZE = 50;" in page
+    assert "SIZE_KEY = 'emscan_page_size'" in page and "applyPage" in page
+    store.close()
 
 
 def test_every_sortable_column_sorts_server_side(tmp_path):

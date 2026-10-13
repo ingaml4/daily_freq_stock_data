@@ -143,6 +143,10 @@ _CACHE: Dict[Tuple[Any, ...], "PageContext"] = {}
 _CACHE_LOCK = threading.Lock()
 _CACHE_MAX = 128
 
+# 表格分页：可选每页行数（前端分页，不重新请求）
+PAGE_SIZES: Tuple[int, ...] = (10, 20, 50, 100)
+DEFAULT_PAGE_SIZE = 20
+
 # 系统每个交易日自动更新数据的时刻（北京时间）—— 默认值与 install_services.sh 的 --daily-times 一致
 DEFAULT_UPDATE_TIMES = "15:32,17:15"
 
@@ -597,19 +601,100 @@ padding:10px 12px;margin-bottom:8px}
 .card .kv div{display:flex;justify-content:space-between;gap:8px;
 border-bottom:1px dashed #232833;padding:2px 0}
 .card .kv span:first-child{color:var(--muted)}
+.pager{display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+justify-content:space-between;
+margin:10px 0;padding:8px 10px;background:var(--card);
+border:1px solid var(--line);border-radius:10px;
+font-size:12px;color:var(--muted)}
+.pager .pg-sizes,.pager .pg-nav{display:flex;gap:6px;align-items:center}
+.pager a{padding:4px 10px;border:1px solid var(--line);border-radius:8px;
+color:var(--fg);cursor:pointer}
+.pager a.active{background:var(--accent);border-color:var(--accent);
+color:#08121d;font-weight:700}
+.pager a.disabled{opacity:.35;cursor:default}
 .cards{display:none}
 @media (max-width:760px){.wrap{display:none}.cards{display:block}}
 footer{color:var(--muted);font-size:11px;padding:0 12px 24px}
 """
 
 JS = """\
-// 表头排序：纯前端（点一下立刻重排），**不改地址栏**。
-// 浏览器支持 localStorage 时记住上次排序列，刷新/切日期后自动套用。
+// 表头排序 + 分页：都在前端做（不刷新、地址栏不变）。
+// 排序后重新排卡片、重算分页；每页行数用 localStorage 记住。
 (function () {
   var ARROW = {asc: '\\u2191', desc: '\\u2193'};
-  var STORE_KEY = 'emscan_sort';
+  var SORT_KEY = 'emscan_sort';
+  var SIZE_KEY = 'emscan_page_size';
   var REMEMBER = __REMEMBER_SORT__;
+  var SIZES = __PAGE_SIZES__;
+  var DEFAULT_SIZE = __PAGE_SIZE__;
 
+  var table = document.querySelector('table');
+  var cardsBox = document.querySelector('.cards');
+  var rows = table && table.tBodies[0] ? Array.prototype.slice.call(table.tBodies[0].rows) : [];
+  var cards = cardsBox ? Array.prototype.slice.call(cardsBox.children) : [];
+  var size = DEFAULT_SIZE;
+  var page = 1;
+
+  function store(key, value) {
+    if (!REMEMBER) return;
+    try { window.localStorage.setItem(key, value); } catch (e) {}
+  }
+  function load(key) {
+    if (!REMEMBER) return null;
+    try { return window.localStorage.getItem(key); } catch (e) { return null; }
+  }
+  var saved = load(SIZE_KEY);
+  if (saved && SIZES.indexOf(parseInt(saved, 10)) >= 0) size = parseInt(saved, 10);
+
+  function pages() { return Math.max(1, Math.ceil(rows.length / size)); }
+  function clamp() { if (page > pages()) page = pages(); if (page < 1) page = 1; }
+
+  function applyPage() {
+    clamp();
+    var start = (page - 1) * size, end = start + size;
+    function show(item, index) {
+      item.style.display = (index >= start && index < end) ? '' : 'none';
+    }
+    rows.forEach(show);
+    cards.forEach(show);
+    document.querySelectorAll('.pager').forEach(function (pager) {
+      var total = pager.querySelector('.pg-total');
+      if (total) total.textContent = rows.length;
+      var range = pager.querySelector('.pg-range');
+      if (range) {
+        var last = Math.min(end, rows.length);
+        range.textContent = rows.length ? (start + 1) + '-' + last + ' 条' : '0 条';
+      }
+      var label = pager.querySelector('.pg-page');
+      if (label) label.textContent = '第 ' + page + ' / ' + pages() + ' 页';
+      pager.querySelectorAll('.pg-size').forEach(function (btn) {
+        btn.classList.toggle('active', parseInt(btn.dataset.size, 10) === size);
+      });
+      var prev = pager.querySelector('.pg-prev'), next = pager.querySelector('.pg-next');
+      if (prev) prev.classList.toggle('disabled', page <= 1);
+      if (next) next.classList.toggle('disabled', page >= pages());
+    });
+  }
+
+  document.querySelectorAll('.pager').forEach(function (pager) {
+    pager.querySelectorAll('.pg-size').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        size = parseInt(btn.dataset.size, 10) || DEFAULT_SIZE;
+        page = 1;
+        store(SIZE_KEY, size);
+        applyPage();
+      });
+    });
+    pager.querySelectorAll('[data-page]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        page += (btn.dataset.page === 'next' ? 1 : -1);
+        applyPage();
+        window.scrollTo({top: 0, behavior: 'smooth'});
+      });
+    });
+  });
+
+  // ---- 排序：只动 rows 数组，然后按同样顺序重排表格行与卡片
   function cellValue(row, index) {
     var cell = row.cells[index];
     if (!cell) return null;
@@ -620,83 +705,77 @@ JS = """\
   }
   function compare(a, b, dir) {
     if (a === null && b === null) return 0;
-    if (a === null) return 1;                       // 空值永远排最后
+    if (a === null) return 1;
     if (b === null) return -1;
     if (typeof a === 'number' && typeof b === 'number') return (a - b) * dir;
     return String(a).localeCompare(String(b), 'zh') * dir;
   }
-  function remember(key, order) {
-    if (!REMEMBER) return;
-    try { window.localStorage.setItem(STORE_KEY, key + ':' + order); } catch (e) {}
+  function syncCards() {
+    if (!cardsBox) return;
+    var bySid = {};
+    cards.forEach(function (card) { bySid[card.dataset.sid] = card; });
+    rows.forEach(function (row) {
+      var match = bySid[row.dataset.sid];
+      if (match) cardsBox.appendChild(match);
+    });
+    cards = Array.prototype.slice.call(cardsBox.children);
   }
-  function recall() {
-    if (!REMEMBER) return null;
-    try {
-      var raw = window.localStorage.getItem(STORE_KEY);
-      if (!raw) return null;
-      var parts = raw.split(':');
-      if (parts.length !== 2) return null;
-      return {key: parts[0], order: parts[1] === 'desc' ? 'desc' : 'asc'};
-    } catch (e) { return null; }
-  }
-  function markState(table, link, key, order) {
-    table.querySelectorAll('th a[data-sort]').forEach(function (other) {
+  function markState(link, key, order) {
+    var links = Array.prototype.slice.call(document.querySelectorAll('th a[data-sort]'));
+    var label = '';
+    links.forEach(function (other) {
       other.classList.toggle('active', other === link);
-      var label = other.textContent.replace(/[\\u2191\\u2193\\u2195]\\s*$/, '').trim();
-      other.textContent = label + ' ' + (other === link ? ARROW[order] : '\\u2195');
+      var text = other.textContent.replace(/[\\u2191\\u2193\\u2195]\\s*$/, '').trim();
+      if (other === link) label = text;
+      other.textContent = text + ' ' + (other === link ? ARROW[order] : '\\u2195');
       other.dataset.order = (other === link) ? (order === 'asc' ? 'desc' : 'asc') : 'asc';
     });
     var hint = document.getElementById('sortState');
     if (hint) {
-      var label2 = link.textContent.replace(/[\\u2191\\u2193\\u2195]\\s*$/, '').trim();
-      hint.textContent = label2 + ' ' + (order === 'asc' ? '升序' : '降序');
+      hint.textContent = label + ' ' + (order === 'asc' ? '升序' : '降序');
       hint.dataset.key = key;
       hint.dataset.order = order;
     }
     var form = document.querySelector('form.toolbar');
     if (form) {
-      var s = form.querySelector('input[name=sort]');
-      var o = form.querySelector('input[name=order]');
+      var s = form.querySelector('input[name=sort]'), o = form.querySelector('input[name=order]');
       if (s) s.value = key;
       if (o) o.value = order;
     }
   }
-  function applySort(table, link, order) {
-    var body = table.tBodies[0];
-    var rows = Array.prototype.slice.call(body.rows);
-    var dir = order === 'asc' ? 1 : -1;
+  function applySort(link, order) {
     var index = link.closest('th').cellIndex;
+    var dir = order === 'asc' ? 1 : -1;
     rows.sort(function (a, b) {
       return compare(cellValue(a, index), cellValue(b, index), dir);
     });
-    rows.forEach(function (row) { body.appendChild(row); });
-    markState(table, link, link.dataset.sort, order);
-    remember(link.dataset.sort, order);
+    rows.forEach(function (row) { table.tBodies[0].appendChild(row); });
+    syncCards();
+    page = 1;
+    applyPage();
+    markState(link, link.dataset.sort, order);
+    store(SORT_KEY, link.dataset.sort + ':' + order);
   }
   var links = Array.prototype.slice.call(document.querySelectorAll('th a[data-sort]'));
   links.forEach(function (link) {
     link.addEventListener('click', function () {
-      var table = link.closest('table');
       if (!table || !table.tBodies[0]) return;
       var order = link.dataset.order === 'desc' ? 'desc' : 'asc';
-      try {
-        applySort(table, link, order);
-      } catch (err) {
+      try { applySort(link, order); } catch (err) {
         if (window.console && console.warn) console.warn('排序失败', err);
       }
     });
   });
-  // 打开页面时套用上次的排序（不改地址栏，只是重排一下表格）
-  var saved = recall();
-  if (saved) {
-    var link = links.filter(function (item) { return item.dataset.sort === saved.key; })[0];
-    if (link) {
-      var table = link.closest('table');
-      if (table && table.tBodies[0]) {
-        try { applySort(table, link, saved.order); } catch (e) {}
-      }
+  // 打开页面时套用上次的排序 + 分页
+  var savedSort = load(SORT_KEY);
+  if (savedSort) {
+    var parts = savedSort.split(':');
+    var match = links.filter(function (item) { return item.dataset.sort === parts[0]; })[0];
+    if (match) {
+      try { applySort(match, parts[1] === 'desc' ? 'desc' : 'asc'); } catch (e) {}
     }
   }
+  applyPage();
 })();
 """
 
@@ -728,6 +807,7 @@ def render_html(
     title: str = "A股日频信号",
     show_logout: bool = False,
     remember_sort: bool = True,
+    page_size: int = DEFAULT_PAGE_SIZE,
 ) -> str:
     """把一页渲染成完整 HTML（服务端渲染，手机/桌面同一份）。"""
     nav = []
@@ -769,15 +849,16 @@ def render_html(
             else:
                 value = row.get(key)
                 cells.append(f'<td class="{_cell_class(key, value)}">{_fmt(value, fmt)}</td>')
-        body_rows.append("<tr>" + "".join(cells) + "</tr>")
+        body_rows.append(f'<tr data-sid="{html.escape(row["secid"])}">' + "".join(cells) + "</tr>")
         kv = "".join(
             f"<div><span>{html.escape(label)}</span><span>{_fmt(row.get(key), fmt)}</span></div>"
             for key, label, fmt, _ in COLUMNS
             if key not in ("code", "name")
         )
         card_rows.append(
-            f'<div class="card"><h3><a href="{html.escape(row["url"])}" target="_blank" '
-            f'rel="noopener">{html.escape(row["code"])} {html.escape(row["name"])}</a></h3>'
+            f'<div class="card" data-sid="{html.escape(row["secid"])}"><h3>'
+            f'<a href="{html.escape(row["url"])}" target="_blank" rel="noopener">'
+            f'{html.escape(row["code"])} {html.escape(row["name"])}</a></h3>'
             f'<div class="kv">{kv}</div></div>'
         )
 
@@ -829,7 +910,14 @@ def render_html(
         )
     )
     empty = "" if ctx.error or ctx.rows else '<p class="hint">这一天没有命中该信号。</p>'
-    js_rendered = JS.replace("__REMEMBER_SORT__", "true" if remember_sort else "false")
+    js_rendered = (
+        JS.replace("__REMEMBER_SORT__", "true" if remember_sort else "false")
+        .replace("__PAGE_SIZES__", "[" + ",".join(str(x) for x in PAGE_SIZES) + "]")
+        .replace("__PAGE_SIZE__", str(int(page_size)))
+        .replace("__TOTAL__", str(int(ctx.total)))
+    )
+    pager = _render_pager(int(page_size)) if ctx.rows else ""
+    pager_block = pager
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -849,7 +937,9 @@ def render_html(
 <main>
   {banner}
   <div class="hint">{hint}</div>
+  {pager_block}
   {body}{empty}
+  {pager_block}
 </main>
 <footer>数据来自本地每日信号缓存（daily_signals）· 代码点击跳转雪球行情 · 表头可点击排序</footer>
 <script>{js_rendered}</script>
@@ -861,6 +951,26 @@ def render_json(ctx: PageContext) -> str:
     return json.dumps(ctx.as_dict(), ensure_ascii=False, indent=2)
 
 
+def _render_pager(active_size: int) -> str:
+    """分页条（每页 10/20/50/100 + 上一页/下一页）；上下各放一个，同一套 JS 驱动。"""
+    sizes = "".join(
+        '<a class="pg-size%s" data-size="%d">%d</a>'
+        % (" active" if size == active_size else "", size, size)
+        for size in PAGE_SIZES
+    )
+    return (
+        '<div class="pager">'
+        '<span class="pg-info">共 <b class="pg-total">-</b> 条，当前 <b class="pg-range">-</b></span>'
+        f'<span class="pg-sizes"><span class="pg-label">每页</span>{sizes}</span>'
+        '<span class="pg-nav">'
+        '<a class="pg-prev" data-page="prev">上一页</a>'
+        '<span class="pg-page">第 1 / 1 页</span>'
+        '<a class="pg-next" data-page="next">下一页</a>'
+        "</span>"
+        "</div>"
+    )
+
+
 # --------------------------------------------------------------------------- 服务
 def make_handler(
     store_factory: Callable[[], Store],
@@ -870,6 +980,7 @@ def make_handler(
     session_days: int = DEFAULT_SESSION_DAYS,
     remember_sort: bool = True,
     update_times: str = DEFAULT_UPDATE_TIMES,
+    page_size: int = DEFAULT_PAGE_SIZE,
 ) -> type:
     """生成一个 ``BaseHTTPRequestHandler`` 子类。
 
@@ -1047,6 +1158,7 @@ def make_handler(
                         title=title,
                         show_logout=bool(password),
                         remember_sort=remember_sort,
+                        page_size=page_size,
                     ).encode("utf-8")
                 )
 
@@ -1095,6 +1207,7 @@ def serve(
     session_days: int = DEFAULT_SESSION_DAYS,
     remember_sort: bool = True,
     update_times: str = DEFAULT_UPDATE_TIMES,
+    page_size: int = DEFAULT_PAGE_SIZE,
     blocking: bool = True,
 ) -> ThreadingHTTPServer:
     """起一个网页服务，返回 server 对象（``blocking=False`` 时自己开线程，方便测试）。"""
@@ -1106,6 +1219,7 @@ def serve(
         session_days=session_days,
         remember_sort=remember_sort,
         update_times=update_times,
+        page_size=page_size,
     )
     httpd = ThreadingHTTPServer((host, int(port)), handler)
     log.info(

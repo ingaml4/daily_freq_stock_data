@@ -127,7 +127,7 @@ DEFAULTS: Dict[str, Any] = {
         "host": "127.0.0.1",  # 只本机可访问；要对外就改 0.0.0.0（记得配 token / 反代认证）
         "port": 8080,
         "title": "A股日频信号",
-        "limit": 300,  # 单页最多显示多少行
+        "limit": 500,  # 服务端一次最多发多少行（前端再分页）
         # 访问口令：设置后浏览器首次访问会跳登录页（Cookie 记住若干天），
         # 脚本/接口也可用 HTTP Basic（curl -u ":$口令"）。留空=开放访问（只适合本机）。
         "password": "",
@@ -137,6 +137,8 @@ DEFAULTS: Dict[str, Any] = {
         "remember_sort": True,
         # 页面上"数据几点更新"的提示（跟 install_services.sh --daily-times 保持一致）
         "update_times": "15:32,17:15",
+        # 表格默认每页多少行（网页上还能随时点 10/20/50/100 切换）
+        "page_size": 20,
     },
     "notify": {
         "enabled": False,

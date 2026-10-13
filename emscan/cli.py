@@ -1095,6 +1095,7 @@ def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
     session_days = int(cfg.get("web.session_days", 7) or 7)
     remember_sort = bool(cfg.get("web.remember_sort", True))
     update_times = str(cfg.get("web.update_times", "15:32,17:15") or "15:32,17:15")
+    page_size = int(cfg.get("web.page_size", 20) or 20)
 
     store = open_store(cfg)
     if not store.latest_signal_date():
@@ -1116,6 +1117,7 @@ def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
             session_days=session_days,
             remember_sort=remember_sort,
             update_times=update_times,
+            page_size=page_size,
         )
     except OSError as exc:
         log.error("端口 %s 起不来（%s）：换一个 --port，或先关掉占用的进程", port, exc)
