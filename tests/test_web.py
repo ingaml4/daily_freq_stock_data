@@ -483,6 +483,32 @@ def test_http_server_token_guard(tmp_path):
         httpd.server_close()
 
 
+def test_serve_accepts_all_cli_options(tmp_path):
+    """regression：cmd_web 传给 serve() 的每个参数都必须在签名里（曾漏过 vol_up_min_pct）。"""
+    _, store, date = _seed(tmp_path)
+    store.close()
+    cfg = make_cfg(tmp_path)
+    httpd = serve(
+        lambda: open_store(cfg),
+        host="127.0.0.1",
+        port=0,
+        title="t",
+        limit=50,
+        password="pw",
+        session_days=3,
+        remember_sort=True,
+        update_times="15:32,17:15",
+        page_size=50,
+        vol_up_min_pct=5.0,
+        blocking=False,
+    )
+    try:
+        assert httpd.server_port > 0
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def test_healthz_needs_no_login(tmp_path):
     """探活端点不校验口令（只回 ok，不含数据），给 nginx/k8s 用。"""
     _, store, date = _seed(tmp_path)

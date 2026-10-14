@@ -1302,6 +1302,7 @@ def serve(
     remember_sort: bool = True,
     update_times: str = DEFAULT_UPDATE_TIMES,
     page_size: int = DEFAULT_PAGE_SIZE,
+    vol_up_min_pct: float = 3.0,
     blocking: bool = True,
 ) -> ThreadingHTTPServer:
     """起一个网页服务，返回 server 对象（``blocking=False`` 时自己开线程，方便测试）。"""
@@ -1314,6 +1315,7 @@ def serve(
         remember_sort=remember_sort,
         update_times=update_times,
         page_size=page_size,
+        vol_up_min_pct=vol_up_min_pct,
     )
     httpd = ThreadingHTTPServer((host, int(port)), handler)
     log.info(
