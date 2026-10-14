@@ -496,8 +496,11 @@ def test_each_view_has_its_own_columns(tmp_path):
     assert "箱体位置" in box and "DIFF" not in box
     rev = render_html(build_context(store, view="reversal"))
     assert "反转分" in rev and "证据" in rev and "DIFF" not in rev
-    for page in (vol, macd, kdj, box, rev):
-        assert "成交额(亿)" in page and "换手率%" in page  # 基础信息每个视图都有
+    # 有数据的视图都带基础信息（box/reversal 在样本里没命中 → 没有表头）
+    for page in (vol, macd, kdj):
+        assert "成交额(亿)" in page and "换手率%" in page
+    for page in (box, rev):
+        assert "成交额(亿)" in page or "没有命中" in page
     store.close()
 
 
