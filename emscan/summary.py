@@ -164,7 +164,8 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
     rows = frame.to_dict("records")
     # 放量大涨 = 信号命中 + 当日涨幅 ≥ 门槛（和网页视图同一个口径，别再出现放量下跌的票）
     vol_up = vol_up_mask(frame, cfg).tolist()
-    digest["totals"]["命中股票数"] = len(rows)
+    # 注意：这是当日**扫描**（缓存里有行）的股票数，不是命中数——命中数按按钮分别算
+    digest["totals"]["扫描股票数"] = len(rows)
     hits_per_symbol: Dict[str, List[str]] = {}
     for flag, label in VIEW_LABELS.items():
         hit = [
