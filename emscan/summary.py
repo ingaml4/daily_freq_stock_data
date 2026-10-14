@@ -222,7 +222,47 @@ def call_deepseek(cfg, prompt: str, api_key: str) -> str:
     )
     resp.raise_for_status()
     payload = resp.json()
-    return str(payload["choices"][0]["message"]["content"]).strip()
+    text = extract_text(payload)
+    if not text:
+        # 结构不一样就把原始响应前 400 字打出来（不含密钥，方便我按实际结构适配）
+        log.warning(
+            "DeepSeek 返回内容为空，原始响应前 400 字：%s",
+            json.dumps(payload, ensure_ascii=False)[:400],
+        )
+    return text
+
+
+def extract_text(payload: Any) -> str:
+    """从常见的几种返回结构里取正文（不同版本/供应商字段名不一样）。
+
+    * OpenAI 风格：``choices[0].message.content``（可能是字符串，也可能是分段列表）
+    * 有的版本把思考过程放 ``reasoning_content``，正文在 ``content``；有的把正文放 ``text``/``output_text``
+    """
+    if not isinstance(payload, dict):
+        return ""
+    choices = payload.get("choices") or []
+    if choices:
+        message = choices[0].get("message") or {}
+        for key in ("content", "text", "reasoning_content"):
+            value = message.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, list):  # 分段内容：[{"type":"text","text":"..."}]
+                joined = "".join(
+                    str(part.get("text") or "") if isinstance(part, dict) else str(part)
+                    for part in value
+                ).strip()
+                if joined:
+                    return joined
+        for key in ("text", "content", "output_text"):
+            value = choices[0].get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    for key in ("output_text", "content", "text"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def generate_summary(
@@ -239,8 +279,14 @@ def generate_summary(
     if api_key:
         try:
             prompt = PROMPT.format(date=trade_date) + "\n\n数据如下：\n" + digest_text(digest)
-            content = call_deepseek(cfg, prompt, api_key)
-            engine = str(cfg.get("summary.model", DEEPSEEK_MODEL) or DEEPSEEK_MODEL)
+            ai_text = call_deepseek(cfg, prompt, api_key)
+            model = str(cfg.get("summary.model", DEEPSEEK_MODEL) or DEEPSEEK_MODEL)
+            if ai_text:
+                content, engine = ai_text, model
+            else:
+                content = rule_summary(digest)
+                engine = f"rule(无正文:{model})"
+                log.warning("AI 没返回正文，本次先用规则版总结（上面有原始响应片段）")
         except Exception as exc:
             log.error("调用 DeepSeek 失败（本次先出规则版）：%s", exc)
     record = {

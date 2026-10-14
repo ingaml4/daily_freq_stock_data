@@ -504,6 +504,20 @@ def test_each_view_has_its_own_columns(tmp_path):
     store.close()
 
 
+def test_summary_buttons_and_text_extraction(tmp_path):
+    """网页要有"当日总结/下载总结"入口；AI 返回结构变化时也能取到正文。"""
+    from emscan.summary import extract_text
+
+    assert extract_text({"choices": [{"message": {"content": "A"}}]}) == "A"
+    assert extract_text({"choices": [{"message": {"content": [{"text": "B"}]}}]}) == "B"
+    assert extract_text({"choices": [{"text": "C"}]}) == "C"
+    assert extract_text({}) == ""
+    _, store, date = _seed(tmp_path)
+    page = render_html(build_context(store, view="vol_spike"))
+    store.close()
+    assert "当日总结" in page and "下载总结" in page and "/summary.md" in page
+
+
 def test_serve_accepts_all_cli_options(tmp_path):
     """regression：cmd_web 传给 serve() 的每个参数都必须在签名里（曾漏过 vol_up_min_pct）。"""
     _, store, date = _seed(tmp_path)
