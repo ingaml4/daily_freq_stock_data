@@ -273,12 +273,12 @@ VIEW_COLUMNS: Dict[str, tuple] = {
     "reversal": BASE_COLUMNS
     + (
         "rev_score",
-        "rev_signals",
         "doji_vol_ratio",
         "doji_drawdown",
         "doji_stop_pos",
         "doji_body",
         "doji_lower",
+        "rev_signals",  # 证据放最后一列（内容长，别挤在中间）
     ),
 }
 

@@ -128,7 +128,7 @@ DEFAULTS: Dict[str, Any] = {
     "reversal": {
         "min_score": 40.0,  # 分数过线才算反转信号
         "drawdown_window": 120,  # 参考「前高」的窗口（交易日）
-        "max_drawdown_from_high": -0.15,  # 距前高回撤 >= 15% 视为处于底部区域
+        "max_drawdown_from_high": -0.15,  # 距前高回撤 >=15% 视为处于底部区域
         "max_pos60": 0.35,  # 或 60 日区间位置 <= 0.35
         "min_drop20": 0.15,  # 或 20 日跌幅 >= 15%（短期超跌）
         "surge_vol_ratio": 1.8,  # 底部放量大涨：量 >= 1.8 倍
