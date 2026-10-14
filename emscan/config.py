@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import copy
+import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
+
+log = logging.getLogger("emscan")
 
 DEFAULTS: Dict[str, Any] = {
     "store": {
@@ -224,6 +227,55 @@ def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]
     return out
 
 
+# 手动运行 CLI 时也要能读到的"环境文件"（systemd 只会给自己的 service 读 EnvironmentFile）
+ENV_FILE_CANDIDATES = (
+    "EMSCAN_ENV_FILE",  # 显式指定
+    ".env",  # 项目目录里的 .env
+    "/etc/emscan/emscan.env",  # 安装脚本生成的那个
+    "~/.config/emscan/emscan.env",
+)
+
+
+def load_env_files(paths=None) -> List[str]:
+    """按顺序把环境文件里的 KEY=VALUE 注入进程环境（**不覆盖**已存在的变量）。
+
+    这样 `python3 -m emscan summary` 和 systemd 里的 service 拿到同一套密钥/配置。
+    """
+    loaded: List[str] = []
+    for item in paths or ENV_FILE_CANDIDATES:
+        raw = os.environ.get(item, "") if item.startswith("EMSCAN_ENV_FILE") else item
+        if not raw:
+            continue
+        path = Path(os.path.expanduser(raw))
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        if not path.is_file():
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            log.debug("读取环境文件 %s 失败：%s", path, exc)
+            continue
+        added = 0
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            if key.startswith("export "):
+                key = key[len("export ") :].strip()
+            value = value.strip().strip("'\"")
+            if not key or key in os.environ:
+                continue
+            os.environ[key] = value
+            added += 1
+        loaded.append(str(path))
+        if added:
+            log.debug("从 %s 载入 %s 个环境变量", path, added)
+    return loaded
+
+
 class Config:
     """配置访问器。
 
@@ -239,6 +291,7 @@ class Config:
     # ------------------------------------------------------------------ 加载
     @classmethod
     def load(cls, path: Optional[str] = None) -> "Config":
+        load_env_files()
         candidate = Path(path).expanduser().resolve() if path else Path.cwd() / "config.yaml"
         user: Dict[str, Any] = {}
         source: Optional[Path] = None
