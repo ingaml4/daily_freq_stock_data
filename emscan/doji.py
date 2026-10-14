@@ -54,6 +54,8 @@ DOJI_BAR_COLUMNS = (
     "pct_chg",
 )
 
+REV_COLUMNS: tuple = ("rev_score", "rev_signals", "s_reversal") + ()
+
 DOJI_COLUMNS: tuple = (
     "doji_body",
     "doji_stop_pos",
@@ -226,3 +228,146 @@ def scan_doji(
             day = latest[["secid"] + keep].drop_duplicates(subset=["secid"])
             features = features.merge(day, on="secid", how="left")
     return features
+
+
+# --------------------------------------------------------------------------- 反转信号（评分制）
+def compute_reversal_features(
+    bars: pd.DataFrame,
+    st_secids: Optional[Sequence[str]] = None,
+    cfg=None,
+) -> pd.DataFrame:
+    """底部反转信号评分：**不是在找"完美十字星"，而是看有多少条积极证据叠在一起**。
+
+    * 底部上下文（必须至少满足一条，否则就是追高）：
+      距 `drawdown_window`（默认 120 日）高点回撤 ≥ `max_drawdown_from_high`(15%)、
+      或 60 日区间位置 ≤ `max_pos60`(0.35)、或 20 日跌幅 ≥ `min_drop20`(15%)；
+    * 证据（每条有独立权重，命中即加分）：
+      底部放量大涨（量≥1.8×、涨≥4%，+25）、缩量止跌（量≤0.6×、涨跌幅 -1.5%~+2%，+20）、
+      长下影（下影 ≥1.5%，+15）、十字星（实体 ≤0.5%，+10）、
+      收阳且收在当日振幅上半部（+10）、20 日区间极低位（+10）、60 日低位（+10）；
+    * `rev_score` 过 `min_score`(55) 且至少有一条"量价证据"才算 `s_reversal=1`，
+      `rev_signals` 里写明命中的证据名，便于你按需再筛。
+    """
+    conf = cfg.get if cfg is not None else (lambda key, default=None: default)
+    win = int(conf("reversal.drawdown_window", 120) or 120)
+    min_score = float(conf("reversal.min_score", 40.0))
+    dd_thr = float(conf("reversal.max_drawdown_from_high", -0.15))
+    pos60_thr = float(conf("reversal.max_pos60", 0.35))
+    drop20_thr = float(conf("reversal.min_drop20", 0.15))
+    surge_vol = float(conf("reversal.surge_vol_ratio", 1.8))
+    surge_pct = float(conf("reversal.surge_pct_chg", 4.0))
+    shrink_ratio = float(conf("reversal.shrink_ratio", 0.6))
+    shrink_win = int(conf("reversal.shrink_window", 5) or 5)
+    min_amount = float(conf("reversal.min_amount", 15_000_000))
+    exclude_st = bool(conf("universe.exclude_st", True))
+    st = set(st_secids or [])
+
+    if bars is None or bars.empty:
+        return pd.DataFrame(
+            columns=["secid"] + list(DOJI_COLUMNS) + ["rev_score", "rev_signals", "s_reversal"]
+        )
+
+    frame = bars.copy()
+    frame["date"] = frame["date"].astype(str)
+    for column in DOJI_BAR_COLUMNS:
+        frame[column] = pd.to_numeric(frame.get(column), errors="coerce")
+    frame = frame[frame["volume"].fillna(0) > 0].sort_values(["secid", "date"])
+
+    out: List[Dict[str, Any]] = []
+    for secid, group in frame.groupby("secid", sort=False):
+        tail = group.tail(max(win, 60, 20))
+        row: Dict[str, Any] = {
+            "secid": str(secid),
+            "s_low_doji": 0,
+            "rev_score": 0.0,
+            "rev_signals": "",
+            "s_reversal": 0,
+        }
+        for column in DOJI_COLUMNS:
+            row.setdefault(column, None)
+        if len(tail) < 20:
+            out.append(row)
+            continue
+        last = tail.iloc[-1]
+        o, h, low_, c = (_f(last["open"]), _f(last["high"]), _f(last["low"]), _f(last["close"]))
+        prev_c = _f(tail["close"].iloc[-2])
+        vol = _f(last["volume"])
+        pct = _f(last["pct_chg"])
+        base = prev_c or c or o
+        if None in (o, h, low_, c, pct) or not base or h == low_:
+            out.append(row)
+            continue
+
+        body = abs(c - o) / base
+        lower = (min(o, c) - low_) / base
+        stop_pos = (c - low_) / (h - low_)
+        row.update(
+            doji_body=body,
+            doji_lower=lower,
+            doji_stop_pos=stop_pos,
+            doji_upper=(h - max(o, c)) / base,
+        )
+
+        hi_win = float(np.nanmax(tail["high"]))
+        lo60 = float(np.nanmin(tail["low"].tail(60)))
+        hi60 = float(np.nanmax(tail["high"].tail(60)))
+        p60 = (c - lo60) / (hi60 - lo60) if hi60 > lo60 else None
+        lo20 = float(np.nanmin(tail["low"].tail(20)))
+        hi20 = float(np.nanmax(tail["high"].tail(20)))
+        p20 = (c - lo20) / (hi20 - lo20) if hi20 > lo20 else None
+        drawdown = (c / hi_win - 1.0) if hi_win else None
+        c20 = _f(tail["close"].tail(21).iloc[0]) if len(tail) >= 21 else None
+        drop20 = (c / c20 - 1.0) if c20 else None
+        prior = tail["volume"].iloc[-(shrink_win + 1) : -1]
+        prior_mean = float(prior.mean()) if len(prior) else None
+        vol_ratio = (vol / prior_mean) if (vol and prior_mean) else None
+        row.update(doji_pos=p60, doji_drawdown=drawdown, doji_vol_ratio=vol_ratio)
+
+        # ---- 底部上下文（至少一条）
+        context = []
+        if drawdown is not None and drawdown <= dd_thr:
+            context.append("回撤")
+        if p60 is not None and p60 <= pos60_thr:
+            context.append("60日低位")
+        if drop20 is not None and drop20 <= -drop20_thr:
+            context.append("20日超跌")
+        # ---- 证据（各自权重）
+        score, evidence = 0.0, []
+        if vol_ratio is not None and vol_ratio >= surge_vol and pct >= surge_pct:
+            score += 25
+            evidence.append("底部放量大涨")
+        if (
+            vol_ratio is not None
+            and vol_ratio <= shrink_ratio
+            and -1.5 <= pct <= 2.0
+            and stop_pos >= 0.35
+        ):
+            score += 20
+            evidence.append("缩量止跌")
+        if lower >= 0.015:
+            score += 15
+            evidence.append("长下影")
+        if body <= 0.005:
+            score += 10
+            evidence.append("十字星")
+        if c > o and stop_pos >= 0.5:
+            score += 10
+            evidence.append("收阳居上")
+        if p20 is not None and p20 <= 0.15:
+            score += 10
+            evidence.append("20日极低位")
+        if p60 is not None and p60 <= pos60_thr:
+            score += 10
+            evidence.append("60日低位")
+        amount = _f(last["amount"])
+        tradable = (amount is None or amount >= min_amount) and not (
+            exclude_st and str(secid) in st
+        )
+        has_price_volume_evidence = any(e in evidence for e in ("底部放量大涨", "缩量止跌"))
+        row["rev_score"] = round(score, 1)
+        row["rev_signals"] = ",".join(evidence)
+        row["s_reversal"] = int(
+            bool(context) and has_price_volume_evidence and score >= min_score and tradable
+        )
+        out.append(row)
+    return pd.DataFrame(out)

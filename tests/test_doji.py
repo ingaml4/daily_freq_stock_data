@@ -84,5 +84,11 @@ def test_doji_command_writes_cache(tmp_path):
     store = open_store(cfg)
     cache = store.load_daily_signals(start=dates[-1], end=dates[-1], join_symbols=True)
     store.close()
-    assert len(cache) == 1 and cache.iloc[0]["s_low_doji"] == 1
-    assert "low_doji" in str(cache.iloc[0]["signals"])
+    row = cache.iloc[0]
+    assert len(cache) == 1 and row["s_reversal"] == 1
+    assert (
+        row["rev_score"] >= 40
+        and "止跌" in str(row["rev_signals"])
+        or "放量" in str(row["rev_signals"])
+    )
+    assert "reversal" in str(row["signals"])

@@ -124,7 +124,20 @@ DEFAULTS: Dict[str, Any] = {
         "min_valid_days": 35,  # 窗口内有效交易日下限（停牌剔除）
         "top_n": 100,
     },
-    # 低位缩量十字星（判定口径见 emscan/doji.py 顶部注释）
+    # 底部反转信号（评分制，口径见 emscan/doji.py:compute_reversal_features）
+    "reversal": {
+        "min_score": 40.0,  # 分数过线才算反转信号
+        "drawdown_window": 120,  # 参考「前高」的窗口（交易日）
+        "max_drawdown_from_high": -0.15,  # 距前高回撤 >= 15% 视为处于底部区域
+        "max_pos60": 0.35,  # 或 60 日区间位置 <= 0.35
+        "min_drop20": 0.15,  # 或 20 日跌幅 >= 15%（短期超跌）
+        "surge_vol_ratio": 1.8,  # 底部放量大涨：量 >= 1.8 倍
+        "surge_pct_chg": 4.0,  #                    且涨幅 >= 4%
+        "shrink_ratio": 0.6,  # 缩量止跌：量 <= 0.6 倍
+        "shrink_window": 5,
+        "min_amount": 15_000_000,
+    },
+    # 低位缩量十字星（旧硬阈值口径，保留但网页按钮已换成"反转信号"）
     "doji": {
         "enabled": True,
         # 形态默认不强制：require_shape=false 时不看十字星形状（只看缩量止跌）

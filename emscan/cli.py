@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 
 from .box import scan_box
-from .doji import doji_params, scan_doji
+from .doji import compute_reversal_features, doji_params
 from .config import Config
 from .demo import synthesize
 from .mairui import (
@@ -79,6 +79,7 @@ PRIMARY_SIGNAL_ALIASES = {
     "boll_break_lower": "s_boll_break_lower",
     "box_range": "s_box_range",
     "low_doji": "s_low_doji",
+    "reversal": "s_reversal",
 }
 
 # `hits` 命令的展示列（读的是每日信号缓存 daily_signals）
@@ -688,12 +689,30 @@ def cmd_doji(cfg: Config, args: argparse.Namespace) -> int:
         return 1
     params = doji_params(cfg)
     log.info("低位缩量十字星筛选：交易日 %s · 口径 %s", trade_date, params)
-    features = scan_doji(store, cfg, trade_date=trade_date, with_symbols=True)
+    from .doji import DOJI_BAR_COLUMNS
+
+    window = int(cfg.get("reversal.drawdown_window", 120) or 120)
+    bars = store.load_recent_bars(calendar_days=window * 2 + 30, columns=DOJI_BAR_COLUMNS)
+    if bars is not None and not bars.empty:
+        bars = bars[bars["date"].astype(str) <= str(trade_date)]
+    symbols = store.symbols_df()
+    st_ids = (
+        [str(x) for x in symbols.loc[symbols["is_st"] == 1, "secid"].tolist()]
+        if symbols is not None and not symbols.empty and "is_st" in symbols.columns
+        else []
+    )
+    features = compute_reversal_features(bars, st_secids=st_ids, cfg=cfg)
     if features is not None and not features.empty:
         features["date"] = trade_date
+        latest = bars[bars["date"].astype(str) == str(trade_date)]
+        keep = [x for x in ("close", "pct_chg", "amount", "turnover") if x in latest.columns]
+        if keep:
+            features = features.merge(
+                latest[["secid"] + keep].drop_duplicates(subset=["secid"]), on="secid", how="left"
+            )
         written = store.upsert_daily_signals(features.to_dict("records"))
-        log.info("每日信号缓存已更新：%s 行（十字星特征 + 命中标记）", written)
-        hits = features[features["s_low_doji"] == 1].copy()
+        log.info("每日信号缓存已更新：%s 行（反转评分 + 证据）", written)
+        hits = features[features["s_reversal"] == 1].copy()
     else:
         hits = features
     if hits is None or hits.empty:
@@ -708,19 +727,19 @@ def cmd_doji(cfg: Config, args: argparse.Namespace) -> int:
             for column in ("code", "name", "board"):
                 hits[column] = meta[column].reindex(hits["secid"]).to_numpy()
     hits["amount_yi"] = hits.get("amount", pd.Series(index=hits.index, dtype=float)) / 1e8
-    hits = hits.sort_values(["doji_pos", "doji_vol_ratio"], ascending=[True, True]).head(
+    hits = hits.sort_values(["rev_score", "doji_vol_ratio"], ascending=[False, True]).head(
         int(cfg.get("doji.top_n", 100) or 100)
     )
     hits["trade_date"] = trade_date
     rule_text = "、".join("%s %s" % (k, v) for k, v in params.items())
     summary = (
-        f"低位缩量十字星 | 交易日 {trade_date}\n"
+        f"底部反转信号（评分制）| 交易日 {trade_date}\n"
         f"命中 {len(hits)} 只 · 按 60 日位置升序（越低越靠前）\n"
         f"口径：{rule_text}"
     )
     print_frame(
         type("_R", (), {"hits": hits})(),
-        columns=DOJI_REPORT_COLUMNS,
+        columns=REVERSAL_REPORT_COLUMNS,
         labels=HITS_LABELS,
         float_formats=HITS_FORMATS,
         summary=summary,
@@ -733,6 +752,21 @@ def cmd_doji(cfg: Config, args: argparse.Namespace) -> int:
     store.record_run("doji", trade_date=trade_date, hits=len(hits))
     store.close()
     return 0
+
+
+REVERSAL_REPORT_COLUMNS = (
+    "code",
+    "name",
+    "board",
+    "close",
+    "pct_chg",
+    "amount_yi",
+    "rev_score",
+    "rev_signals",
+    "doji_vol_ratio",
+    "doji_drawdown",
+    "doji_stop_pos",
+)
 
 
 DOJI_REPORT_COLUMNS = (

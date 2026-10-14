@@ -74,12 +74,12 @@ VIEWS: Dict[str, Dict[str, str]] = {
         "sort": "boll_pos",
         "order": "asc",
     },
-    "low_doji": {
-        "flag": "s_low_doji",
-        "nav": "缩量止跌",
-        "title": "缩量止跌（大幅回撤后突然缩量、当日不再下跌）",
-        "sort": "doji_pos",
-        "order": "asc",
+    "reversal": {
+        "flag": "s_reversal",
+        "nav": "反转信号",
+        "title": "底部反转信号（评分制：底部上下文 + 量价证据叠加，分越高越强）",
+        "sort": "rev_score",
+        "order": "desc",
     },
     "box_range": {
         "flag": "s_box_range",
@@ -121,6 +121,8 @@ COLUMNS: Tuple[Tuple[str, str, Optional[str], bool], ...] = (
     ("doji_pos", "60日位置", "{:.2f}", True),
     ("doji_body", "实体%", "{:.2%}", True),
     ("doji_stop_pos", "收盘位置", "{:.2f}", True),
+    ("rev_score", "反转分", "{:.0f}", True),
+    ("rev_signals", "证据", None, False),
     ("doji_vol_ratio", "量/前5日均", "{:.2f}", True),
     ("doji_drawdown", "距60日高点%", "{:+.1%}", True),
     ("signals_cn", "命中信号", None, False),
@@ -293,6 +295,27 @@ def build_view_help(cfg) -> Dict[str, str]:
             ex=g("box.max_extreme_days", 2),
             amt=round(float(g("box.min_amount", 0) or 0) / 10000),
             days=g("box.min_valid_days", 35),
+        ),
+        "reversal": (
+            "<b>底部反转信号（评分制）</b>：先判断「是不是在底部区域」，再看有几条积极证据叠加，"
+            "分越高越强。<br>"
+            "① <b>底部上下文</b>（至少一条）：距 {dw} 个交易日高点回撤 ≥ {dd}、"
+            "或 60 日区间位置 ≤ {p60}、或 20 日跌幅 ≥ {d20}；<br>"
+            "② <b>证据与权重</b>：底部放量大涨（量≥{sv}× 且涨幅≥{sp}%）+25、"
+            "缩量止跌（量≤{sr}× 且 涨跌幅 {lo}~{hi}%）+20、长下影 +15、十字星 +10、"
+            "收阳且收在振幅上半部 +10、20 日极低位 +10、60 日低位 +10；<br>"
+            "③ 分数 ≥ {ms} 且有「放量/缩量」这类量价证据才算命中；按反转分降序排。"
+        ).format(
+            dw=g("reversal.drawdown_window", 120),
+            dd=g("reversal.max_drawdown_from_high", -0.15),
+            p60=g("reversal.max_pos60", 0.35),
+            d20=g("reversal.min_drop20", 0.15),
+            sv=g("reversal.surge_vol_ratio", 1.8),
+            sp=g("reversal.surge_pct_chg", 4.0),
+            sr=g("reversal.shrink_ratio", 0.6),
+            lo=-1.5,
+            hi=2.0,
+            ms=g("reversal.min_score", 55),
         ),
         "low_doji": (
             "<b>缩量止跌</b>（三条同时满足）：<br>"
