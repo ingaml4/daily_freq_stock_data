@@ -25,6 +25,7 @@ import gzip
 import hashlib
 import hmac
 import html
+import re
 import json
 import logging
 import threading
@@ -244,6 +245,81 @@ def flag_names(flags: Any) -> str:
         if key:
             names.append(FLAG_LABELS.get(f"s_{key}", key))
     return "、".join(names)
+
+
+def build_view_help(cfg) -> Dict[str, str]:
+    """生成每个按钮的"筛选口径"说明（数值取自 config，改配置就会跟着变）。"""
+    g = cfg.get
+    macd = g("scan.min_amount", 0)
+    help_text = {
+        "vol_spike": (
+            "放量命中：量比5 ≥ {v5} 且（量比20 ≥ {v20} 或 Z60 ≥ {z}）；"
+            "当日成交额 ≥ {amt} 万元、换手率 ≥ {to}%、至少 {mb} 根K线、非ST/停牌。<br>"
+            "<b>本按钮只显示当日涨幅 ≥ {up}% 的</b>（放量下跌、放量滞涨不在这里显示；"
+            "完整名单见 `python3 -m emscan hits --only vol_spike`）。"
+        ).format(
+            v5=g("scan.vol_ratio_5_min", 2.0),
+            v20=g("scan.vol_ratio_20_min", 1.5),
+            z=g("scan.z_min", 3.0),
+            amt=round(float(g("scan.min_amount", 0) or 0) / 10000),
+            to=g("scan.min_turnover", 0.5),
+            mb=g("universe.min_bars", 25),
+            up=g("scan.vol_up_min_pct", 3.0),
+        ),
+        "macd_golden": "MACD 金叉：日线 DIFF 上穿 DEA（昨天 DIFF ≤ DEA，今天 DIFF > DEA），"
+        "用前复权价算。报告里同时给出 DIFF/DEA/柱值。",
+        "kdj_golden": "KDJ 金叉：K 上穿 D（参数 9,3,3；昨天 K ≤ D，今天 K > D）。"
+        "报告里带 K/D/J 三个值，J 越极端说明短线越超买/超卖。",
+        "boll_break_lower": "BOLL 下轨突破：当日<b>收盘 ≤ 布林下轨</b>（BOLL 20 日 ±2σ）。"
+        "报告里给出上/中/下轨和「布林位置」（0=贴下轨）。",
+        "box_range": (
+            "箱体震荡 + 换手健康（{w} 个交易日 ≈ {m:.0f} 个月）：箱体高度 {w1}~{w2}、"
+            "净涨跌 ≤ ±{net}、|MA5-MA20|/MA20 ≤ {gap}；日均换手 {t1}~{t2}% 且变异系数 ≤ {cv}；"
+            "日均振幅 {a1}~{a2}%；|涨跌|≥9.5% 天数 ≤ {ex}；成交额 ≥ {amt} 万；"
+            "有效交易日 ≥ {days}、非ST。<br>按<b>箱体位置升序</b>（0=贴箱底）排，方便高抛低吸。"
+        ).format(
+            w=g("box.window", 40),
+            m=float(g("box.window", 40) or 40) / 20,
+            w1=g("box.min_width", 0.06),
+            w2=g("box.max_width", 0.35),
+            net=g("box.max_net_chg", 0.12),
+            gap=g("box.max_ma_gap", 0.04),
+            t1=g("box.min_avg_turnover", 1.0),
+            t2=g("box.max_avg_turnover", 15.0),
+            cv=g("box.max_turnover_cv", 1.0),
+            a1=g("box.min_avg_amplitude", 2.0),
+            a2=g("box.max_avg_amplitude", 9.0),
+            ex=g("box.max_extreme_days", 2),
+            amt=round(float(g("box.min_amount", 0) or 0) / 10000),
+            days=g("box.min_valid_days", 35),
+        ),
+        "low_doji": (
+            "低位缩量十字星：① 实体 |收-开|/前收 ≤ {body}，且<b>上下影线各 ≥ {mult} 倍实体</b>；"
+            "② <b>低位</b>：收盘在最近 {w} 个交易日区间的位置 ≤ {pos}（或距 {w} 日高点回撤 ≥ {dd}）；"
+            "③ <b>缩量</b>：当日量 ≤ 之前 {sw} 个交易日均量 × {sr}；"
+            "④ 成交额 ≥ {amt} 万、换手 ≤ {to}%、≥{mb} 根K线、非ST。<br>"
+            "按 60 日位置升序排（越低越靠前）。"
+        ).format(
+            body=g("doji.body_ratio", 0.003),
+            mult=g("doji.shadow_body_multiple", 2.0),
+            w=g("doji.position_window", 60),
+            pos=g("doji.max_position", 0.30),
+            dd=g("doji.max_drawdown_from_high", -0.20),
+            sw=g("doji.shrink_window", 5),
+            sr=g("doji.shrink_ratio", 0.6),
+            amt=round(float(g("doji.min_amount", 0) or 0) / 10000),
+            to=g("doji.max_turnover", 5.0),
+            mb=g("doji.min_bars", 45),
+        ),
+    }
+    _ = macd
+    return help_text
+
+
+def plain_help(text: str) -> str:
+    """把口径说明转成纯文本（用于按钮的原生 title 悬浮提示）。"""
+    text = text.replace("<br>", " / ").replace("<b>", "").replace("</b>", "")
+    return re.sub(r"<[^>]+>", "", text)
 
 
 def normalize_view(view: Optional[str]) -> str:
@@ -632,6 +708,10 @@ left:var(--col1-w,66px);z-index:2;background:var(--card)}
 thead th:first-child,thead th:nth-child(2){z-index:5}
 table td:first-child,table th:first-child{min-width:66px}
 .dd{position:relative}
+.dd.help{float:right;font-weight:400}
+.dd.help summary{font-size:12px;color:var(--muted)}
+.dd.help .dd-body{right:0;left:auto;max-width:min(92vw,520px);
+white-space:normal;line-height:1.7;color:var(--muted)}
 .dd summary{list-style:none;cursor:pointer;padding:6px 10px;border:1px solid var(--line);
 border-radius:8px;background:var(--card);color:var(--fg);font-size:13px}
 .dd summary::-webkit-details-marker{display:none}
@@ -891,13 +971,18 @@ def render_html(
     show_logout: bool = False,
     remember_sort: bool = True,
     page_size: int = DEFAULT_PAGE_SIZE,
+    help_text: str = "",
+    help_map: Optional[Dict[str, str]] = None,
 ) -> str:
     """把一页渲染成完整 HTML（服务端渲染，手机/桌面同一份）。"""
+    help_map = help_map or {}
     nav = []
     for key, spec in VIEWS.items():
         active = ' class="active"' if key == ctx.view else ""
+        tip = plain_help(help_map.get(key, ""))
+        tip_attr = (' title="%s"' % html.escape(tip, quote=True)) if tip else ""
         nav.append(
-            f'<a{active} href="/signals/{key}?date={html.escape(ctx.date or "")}">'
+            f'<a{active} href="/signals/{key}?date={html.escape(ctx.date or "")}"{tip_attr}>'
             f'{html.escape(spec["nav"])}</a>'
         )
 
@@ -1003,6 +1088,8 @@ def render_html(
 <body>
 <header>
   <div class="brand">{html.escape(title)}<span>{html.escape(ctx.title or "")}</span>
+    {('<details class="dd help"><summary title="筛选口径">筛选口径 ?</summary>'
+      f'<div class="dd-body">{help_text}</div></details>') if help_text else ""}
     {('<a class="logout" href="/logout">退出登录</a>') if show_logout else ""}</div>
   <nav>{"".join(nav)}</nav>
   <form class="toolbar" method="get" action="/signals/{ctx.view}">
@@ -1074,6 +1161,7 @@ def make_handler(
     update_times: str = DEFAULT_UPDATE_TIMES,
     page_size: int = DEFAULT_PAGE_SIZE,
     vol_up_min_pct: float = 3.0,
+    view_help: Optional[Dict[str, str]] = None,
 ) -> type:
     """生成一个 ``BaseHTTPRequestHandler`` 子类。
 
@@ -1253,6 +1341,8 @@ def make_handler(
                         show_logout=bool(password),
                         remember_sort=remember_sort,
                         page_size=page_size,
+                        help_text=(view_help or {}).get(normalize_view(view), ""),
+                        help_map=view_help or {},
                     ).encode("utf-8")
                 )
 
@@ -1303,6 +1393,7 @@ def serve(
     update_times: str = DEFAULT_UPDATE_TIMES,
     page_size: int = DEFAULT_PAGE_SIZE,
     vol_up_min_pct: float = 3.0,
+    view_help: Optional[Dict[str, str]] = None,
     blocking: bool = True,
 ) -> ThreadingHTTPServer:
     """起一个网页服务，返回 server 对象（``blocking=False`` 时自己开线程，方便测试）。"""
@@ -1316,6 +1407,7 @@ def serve(
         update_times=update_times,
         page_size=page_size,
         vol_up_min_pct=vol_up_min_pct,
+        view_help=view_help,
     )
     httpd = ThreadingHTTPServer((host, int(port)), handler)
     log.info(

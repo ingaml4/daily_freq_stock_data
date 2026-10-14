@@ -1172,7 +1172,7 @@ def _print_request_budget(cfg: Config, info: Dict[str, Any]) -> None:
 # --------------------------------------------------------------------------- 网页端
 def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
     """起网页端：四个查询按钮（放量 / MACD金叉 / KDJ金叉 / 布林下轨）+ 可排序表格。"""
-    from .web import serve  # 延迟导入：只有跑 web 命令才需要它
+    from .web import build_view_help, serve  # 延迟导入：只有跑 web 命令才需要它
 
     host = getattr(args, "host", None) or cfg.get("web.host", "127.0.0.1")
     port = int(getattr(args, "port", None) or cfg.get("web.port", 8080))
@@ -1212,6 +1212,7 @@ def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
             update_times=update_times,
             page_size=page_size,
             vol_up_min_pct=vol_up_min_pct,
+            view_help=build_view_help(cfg),
         )
     except OSError as exc:
         log.error("端口 %s 起不来（%s）：换一个 --port，或先关掉占用的进程", port, exc)
