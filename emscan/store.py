@@ -27,7 +27,7 @@ from .mairui import BAR_FIELDS, INDICATOR_MAP
 log = logging.getLogger(__name__)
 
 # 表结构版本号：改 SCHEMA / 迁移逻辑就 +1（init_schema 靠它决定要不要重建）
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 DAILY_SIGNALS_VIEW = """CREATE VIEW IF NOT EXISTS daily_signals_named AS
 SELECT
@@ -196,6 +196,15 @@ CREATE INDEX IF NOT EXISTS idx_daily_signals_date ON daily_signals(date);
 
 CREATE TABLE IF NOT EXISTS trading_days (
     date TEXT PRIMARY KEY
+);
+
+-- 每日复盘总结（AI 或规则版），一天一条
+CREATE TABLE IF NOT EXISTS daily_summary (
+    date       TEXT PRIMARY KEY,
+    created_at TEXT,
+    engine     TEXT,
+    content    TEXT,
+    digest     TEXT
 );
 
 -- 键值小表：目前存"数据版本"计数器（网页端靠它判断页面缓存是否过期）
@@ -552,6 +561,33 @@ class Store:
         self.conn.commit()
         row = self.conn.execute("SELECT value FROM meta WHERE key='data_version'").fetchone()
         return int(row["value"]) if row else int(cur.lastrowid or 1)
+
+    # ------------------------------------------------------- 当日总结（复盘）
+    def save_summary(self, record: Dict[str, Any]) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO daily_summary (date, created_at, engine, content, digest) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                str(record.get("date")),
+                _now(),
+                str(record.get("engine") or ""),
+                str(record.get("content") or ""),
+                str(record.get("digest") or ""),
+            ),
+        )
+        self.conn.commit()
+        self.bump_data_version()
+
+    def get_summary(self, date: str) -> Optional[Dict[str, Any]]:
+        row = self.conn.execute(
+            "SELECT date, created_at, engine, content, digest FROM daily_summary WHERE date = ?",
+            (str(date),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def latest_summary_date(self) -> Optional[str]:
+        row = self.conn.execute("SELECT MAX(date) AS d FROM daily_summary").fetchone()
+        return row["d"] if row and row["d"] else None
 
     def data_version(self) -> str:
         """当前数据版本（没有就是 "0"）。"""

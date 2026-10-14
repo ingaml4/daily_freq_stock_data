@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 
 from .box import scan_box
+from .summary import generate_summary, is_due as summary_is_due, summary_after
 from .doji import compute_reversal_features, doji_params
 from .config import Config
 from .demo import synthesize
@@ -784,6 +785,40 @@ DOJI_REPORT_COLUMNS = (
 )
 
 
+def cmd_summary(cfg: Config, args: argparse.Namespace) -> int:
+    """生成当日复盘总结（有 DeepSeek 密钥就用 AI，否则出规则版）。"""
+    store = open_store(cfg)
+    trade_date = getattr(args, "trade_date", None) or store.latest_signal_date()
+    if not trade_date:
+        log.error("本地还没有每日信号缓存，先跑 run")
+        store.close()
+        return 1
+    api_key = str(getattr(args, "api_key", None) or cfg.get("summary.api_key") or "")
+    if not api_key and not getattr(args, "force_rule", False) and not summary_is_due(cfg):
+        log.warning(
+            "现在还没到 %s（%s 之后数据才齐全），加 --force 可强制生成",
+            summary_after(cfg),
+            "17:15 那轮",
+        )
+    record = generate_summary(
+        store, cfg, trade_date, api_key=api_key, force=bool(getattr(args, "force", False))
+    )
+    log.info(
+        "总结已生成：交易日 %s · 引擎 %s · %s 字",
+        trade_date,
+        record.get("engine"),
+        len(str(record.get("content") or "")),
+    )
+    for path in __import__("emscan.summary", fromlist=["write_summary_files"]).write_summary_files(
+        record, cfg
+    ):
+        log.info("总结已写出：%s", path)
+    print(str(record.get("content") or ""))
+    store.record_run("summary", trade_date=trade_date, note=f"engine={record.get('engine')}")
+    store.close()
+    return 0
+
+
 def cmd_signals(cfg: Config, args: argparse.Namespace) -> int:
     """筛"MACD/KDJ 金叉、布林下轨"等指标信号，出终端表格 + CSV/XLSX。"""
     store = open_store(cfg)
@@ -1014,6 +1049,15 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
         except Exception as exc:
             log.error("十字星筛选失败：%s", exc)
             log.debug("详细堆栈", exc_info=True)
+    if bool(cfg.get("summary.enabled", True)) and summary_is_due(cfg):
+        try:
+            args2 = argparse.Namespace(**vars(args))
+            args2.api_key = None
+            args2.force = False
+            args2.force_rule = False
+            rc = max(rc, cmd_summary(cfg, args2))
+        except Exception as exc:
+            log.error("生成当日总结失败：%s", exc)
     if _signals_enabled(cfg, args):
         try:
             rc = max(rc, cmd_signals(cfg, args))
@@ -1247,6 +1291,7 @@ def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
             page_size=page_size,
             vol_up_min_pct=vol_up_min_pct,
             view_help=build_view_help(cfg),
+            summary_after_cfg=summary_after(cfg),
         )
     except OSError as exc:
         log.error("端口 %s 起不来（%s）：换一个 --port，或先关掉占用的进程", port, exc)
@@ -1305,6 +1350,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_doji = sub.add_parser("doji", help="筛低位缩量十字星（超跌企稳观察）")
     p_doji.add_argument("--trade-date", dest="trade_date", help="交易日 YYYY-MM-DD（默认最新）")
+
+    p_sum = sub.add_parser("summary", help="生成当日复盘总结（DeepSeek 或规则版）")
+    p_sum.add_argument("--trade-date", dest="trade_date", help="交易日 YYYY-MM-DD（默认最新）")
+    p_sum.add_argument(
+        "--api-key", dest="api_key", help="DeepSeek 密钥（也可用 DEEPSEEK_API_KEY 环境变量）"
+    )
+    p_sum.add_argument("--force", action="store_true", help="已存在也重新生成")
+    p_sum.add_argument(
+        "--force-rule", dest="force_rule", action="store_true", help="没到时间也生成（规则版）"
+    )
 
     p_scan = sub.add_parser("scan", help="用本地数据扫描放量（可回看历史某天）")
     p_scan.add_argument("--trade-date", dest="trade_date", help="要扫描的交易日 YYYY-MM-DD")
@@ -1386,6 +1441,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "scan": cmd_scan,
         "box": cmd_box,
         "doji": cmd_doji,
+        "summary": cmd_summary,
         "signals": cmd_signals,
         "hits": cmd_hits,
         "run": cmd_run,

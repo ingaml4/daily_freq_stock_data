@@ -159,6 +159,21 @@ DEFAULTS: Dict[str, Any] = {
         "min_bars": 45,  # 至少要有 45 根K线（窗口 60 天要有数据才能判低位）
         "top_n": 100,
     },
+    # 收盘后复盘总结（网页"下载当日总结"）
+    "summary": {
+        "enabled": True,
+        # 只在当天几点之后生成（避开 15:32 那次数据不全的运行）
+        "only_after": "17:00",
+        # DeepSeek 密钥入口：优先环境变量 DEEPSEEK_API_KEY，其次这里
+        "api_key": "",
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-chat",
+        "temperature": 0.3,
+        "max_tokens": 1600,
+        "timeout": 90,
+        "top_symbols": 15,  # 每个按钮给 AI 看前 N 只
+    },
     "web": {
         # 网页端：python3 -m emscan web
         "host": "127.0.0.1",  # 只本机可访问；要对外就改 0.0.0.0（记得配 token / 反代认证）
@@ -239,6 +254,9 @@ class Config:
         if env_licence:
             data["mairui"]["licence"] = env_licence
         # 网页端的监听/口令也支持环境变量（systemd EnvironmentFile 里放这些最方便）
+        env_summary = os.environ.get("DEEPSEEK_API_KEY")
+        if env_summary:
+            data["summary"]["api_key"] = env_summary
         env_web = {
             "EMSCAN_WEB_HOST": "host",
             "EMSCAN_WEB_PORT": "port",

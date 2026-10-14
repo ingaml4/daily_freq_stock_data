@@ -1318,6 +1318,8 @@ def render_html(
     <input name="q" value="{html.escape(ctx.query)}" placeholder="代码/名称" size="10">
     <button type="submit">查询</button>
     <a class="refresh" href="/signals/{ctx.view}">刷新</a>
+    <a class="refresh" href="/summary" title="收盘后（17:00 之后）自动生成的当日复盘">当日总结</a>
+    <a class="refresh" href="/summary.md" download title="下载 Markdown">下载总结</a>
     {board_filter}
   </form>
 </header>
@@ -1384,6 +1386,7 @@ def make_handler(
     page_size: int = DEFAULT_PAGE_SIZE,
     vol_up_min_pct: float = 3.0,
     view_help: Optional[Dict[str, str]] = None,
+    summary_after_cfg: str = "17:00",
 ) -> type:
     """生成一个 ``BaseHTTPRequestHandler`` 子类。
 
@@ -1525,6 +1528,50 @@ def make_handler(
                     self._redirect(f"/login?next={target}")
                 return
 
+            if path in ("/summary", "/summary.md"):
+                st = store_factory()
+                date = str(params.get("date") or "") or (st.latest_summary_date() or "")
+                record = st.get_summary(date) if date else None
+                if not record:
+                    body = (
+                        "当日总结还没生成（默认 %s 之后那次更新时生成，数据更完整）。"
+                        % summary_after_cfg
+                    ).encode("utf-8")
+                    if path.endswith(".md"):
+                        self._send(body, 404, "text/plain; charset=utf-8")
+                    else:
+                        self._send(body, 200, "text/plain; charset=utf-8")
+                    return
+                content = str(record.get("content") or "")
+                if path.endswith(".md"):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/markdown; charset=utf-8")
+                    self.send_header(
+                        "Content-Disposition",
+                        'attachment; filename="summary_%s.md"' % str(record.get("date")),
+                    )
+                    raw = content.encode("utf-8")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                page = (
+                    '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+                    '<meta name="viewport" content="width=device-width, initial-scale=1">'
+                    "<title>%s 当日总结</title><style>body{background:#0f1115;color:#e8ecf3;"
+                    "font:14px/1.7 -apple-system,'PingFang SC',Arial,sans-serif;margin:0;padding:14px}"
+                    "pre{white-space:pre-wrap;word-break:break-word;background:#171a21;border:1px solid "
+                    "#262b36;border-radius:10px;padding:12px}a{color:#4aa8ff}</style></head><body>"
+                    '<p><a href="/">← 返回</a> · <a href="/summary.md">下载 Markdown</a> · 引擎 %s</p>'
+                    "<pre>%s</pre></body></html>"
+                ) % (
+                    str(record.get("date")),
+                    str(record.get("engine")),
+                    html.escape(content),
+                )
+                self._send(page.encode("utf-8"))
+                return
+
             view = params.get("view")
             if path.startswith("/signals/"):
                 view = path.split("/signals/", 1)[1] or view
@@ -1616,6 +1663,7 @@ def serve(
     page_size: int = DEFAULT_PAGE_SIZE,
     vol_up_min_pct: float = 3.0,
     view_help: Optional[Dict[str, str]] = None,
+    summary_after_cfg: str = "17:00",
     blocking: bool = True,
 ) -> ThreadingHTTPServer:
     """起一个网页服务，返回 server 对象（``blocking=False`` 时自己开线程，方便测试）。"""
@@ -1630,6 +1678,7 @@ def serve(
         page_size=page_size,
         vol_up_min_pct=vol_up_min_pct,
         view_help=view_help,
+        summary_after_cfg=summary_after_cfg,
     )
     httpd = ThreadingHTTPServer((host, int(port)), handler)
     log.info(
