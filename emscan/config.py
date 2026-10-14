@@ -178,7 +178,11 @@ DEFAULTS: Dict[str, Any] = {
         "thinking": True,  # 想更省/更快就设 false（等价于 reasoning_effort: none）
         "reasoning_effort": "high",  # none / low / high / max（none=关思考；max 预算更大、更慢）
         "timeout": 240,  # 思考模式更慢；非流式一次回完，给足读超时
-        "top_symbols": 15,  # 每个按钮给 AI 看前 N 只
+        # 每个按钮给 AI 看多少只：0 = 全部命中（不抽样，推荐）；填正数则只给前 N 只（省 token）
+        "top_symbols": 0,
+        # true = 连"全市场简表"（缓存里所有股票的涨跌幅/成交额/换手/量比/命中标记）也喂给 AI
+        # （上下文 1M，塞得下；prompt 会大很多，一般不需要）
+        "include_universe": False,
     },
     "web": {
         # 网页端：python3 -m emscan web

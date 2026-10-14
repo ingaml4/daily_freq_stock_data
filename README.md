@@ -42,7 +42,7 @@ bash scripts/daily_scan.sh                  # 以后每天由 cron 跑这一条
 | `python3 -m emscan box [--trade-date ...]` | 筛**箱体震荡 + 换手健康**的票（做 T 备选池） |
 | `python3 -m emscan doji [--trade-date ...]` | 筛**低位缩量十字星**（超跌企稳观察信号） |
 | `python3 -m emscan hits [--date ...] [--secid ...] [--only ...]` | **查每日信号缓存**（四个主信号，不联网、秒回） |
-| `python3 -m emscan summary [--force] [--rule]` | 生成当日复盘总结（有 `DEEPSEEK_API_KEY` 走 AI，没有就出规则版） |
+| `python3 -m emscan summary [--force] [--force-rule]` | 生成当日复盘总结（有 `DEEPSEEK_API_KEY` 走 AI，没有就出规则版） |
 | `python3 -m emscan web [--host ...] [--port ...] [--password ...]` | **起网页端**：四个查询按钮 + 可排序表格（口令登录，代码跳雪球） |
 | `python3 -m emscan demo` | 无网络自检：合成行情跑通"落库→扫描→报告" |
 | `python3 -m emscan init` | 只初始化行情库 |
@@ -347,14 +347,21 @@ A股日频指标信号 | 交易日 2026-10-12
 ## 收盘复盘总结（DeepSeek，可选）
 
 当天数据齐了之后（默认 **17:00**，见 `summary.only_after`），`emscan run` 会把六个按钮的命中汇总成一份
-结构化摘要，再交给 DeepSeek 写中文复盘：今日主线与板块集中度、结构性特征（低位反转还是高位放量）、
-多信号共振个股、需要自行核实的地方。**没配密钥就出"规则版"**（只有本地数据统计，不调 AI）。
+结构化摘要，再交给 DeepSeek 写中文复盘：今日全景、板块与结构、**逐个按钮解读**、多信号共振、
+反转信号质量排序、风险提示与可执行的跟踪清单，目标 **1500~3000 字**。
+**没配密钥就出"规则版"**（只有本地数据统计，不调 AI）。
+
+给 AI 的数据是**全量**的：`summary.top_symbols: 0`（默认）表示每个按钮有多少只命中就给它多少只，
+不做抽样、不截断；每个按钮还附带整体统计（涨跌幅中位数/区间、上涨比例、换手中位数、成交额合计、指标中位数）
+和**筛选口径**（和网页悬浮提示同一份，见 `emscan/views.py`），避免 AI 把"放量大涨"理解成放量下跌。
+想省 token 可以把 `top_symbols` 设成正数；再加 `include_universe: true` 还会把"全市场简表"
+（缓存里所有股票的涨跌幅/成交额/换手/量比/命中标记）一起喂进去——1M 上下文塞得下，一般不需要。
 
 - 落库 `daily_summary` 表，同时写出 `data/reports/summary_<交易日>.md`
 - 网页端顶部有"当日总结"（看正文）和"下载总结"（下载 Markdown）
 - 密钥入口（优先级从高到低）：环境变量 `DEEPSEEK_API_KEY`（推荐写进 `/etc/emscan/emscan.env` 或 `.env`）、
   `config.yaml: summary.api_key`、命令行 `--api-key`
-- 手动补跑：`python3 -m emscan summary --force`；只想出规则版加 `--rule`
+- 手动补跑：`python3 -m emscan summary --force`；没到 17:00 也想生成就加 `--force-rule`
 
 ### 模型与思考模式（这里有坑）
 
@@ -366,6 +373,8 @@ summary:
   max_tokens: 32000          # 生成上限，官方允许 1~393216；填 0 = 不传，用官方默认
   timeout: 240               # 思考模式更慢，非流式一次回完，读超时给足
   only_after: "17:00"        # 几点之后才生成（避开 15:32 那次数据不全）
+  top_symbols: 0             # 每个按钮给 AI 看多少只；0 = 全部命中（默认，不抽样）
+  include_universe: false    # true = 连"全市场简表"也喂给 AI（prompt 会大很多）
 ```
 
 三点值得记住：

@@ -1259,7 +1259,8 @@ def _print_request_budget(cfg: Config, info: Dict[str, Any]) -> None:
 # --------------------------------------------------------------------------- 网页端
 def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
     """起网页端：四个查询按钮（放量 / MACD金叉 / KDJ金叉 / 布林下轨）+ 可排序表格。"""
-    from .web import build_view_help, serve  # 延迟导入：只有跑 web 命令才需要它
+    from .views import build_view_help  # 按钮口径只有一份（网页/复盘共用）
+    from .web import serve  # 延迟导入：只有跑 web 命令才需要它
 
     host = getattr(args, "host", None) or cfg.get("web.host", "127.0.0.1")
     port = int(getattr(args, "port", None) or cfg.get("web.port", 8080))

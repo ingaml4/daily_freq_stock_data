@@ -1,7 +1,9 @@
 """复盘总结的请求参数与"思考模式不给正文/被截断"的兜底逻辑。"""
 
+import json
 import types
 
+import pandas as pd
 import pytest
 import requests
 from helpers import make_cfg
@@ -10,6 +12,7 @@ from emscan import summary as summary_mod
 from emscan.summary import (
     MAX_TOKENS_CEILING,
     _build_body,
+    build_digest,
     call_deepseek,
     extract_reasoning,
     extract_text,
@@ -199,3 +202,136 @@ def test_generate_summary_labels_engine_with_thinking_mode(tmp_path, monkeypatch
     record = generate_summary(Store(), cfg, "2026-10-13", api_key="sk-test")
     assert record["content"] == "复盘正文"
     assert saved["engine"] == "deepseek-flash(thinking=high)"
+
+
+def _signals_frame(rows):
+    return pd.DataFrame(rows)
+
+
+class _Store:
+    def __init__(self, frame):
+        self.frame = frame
+
+    def load_daily_signals(self, **_kwargs):
+        return self.frame
+
+
+def test_digest_gives_every_hit_and_filters_vol_spike_by_pct(tmp_path):
+    """放量大涨必须带涨幅门槛（放量下跌不算）；命中名单默认不抽样。"""
+    cfg = make_cfg(tmp_path)
+    rows = [
+        # 放量上涨 → 算放量大涨
+        dict(
+            secid="1.600001",
+            code="600001",
+            name="放量上涨",
+            board="sh_main",
+            pct_chg=6.0,
+            amount=5e8,
+            turnover=3.0,
+            vol_ratio_5=4.0,
+            s_vol_spike=1,
+            s_kdj_golden=1,
+            kdj_j=80.0,
+        ),
+        # 放量但下跌 → 不该进"放量大涨"（曾经就是因为这个被 AI 抓出来）
+        dict(
+            secid="1.600002",
+            code="600002",
+            name="放量下跌",
+            board="sz_main",
+            pct_chg=-8.9,
+            amount=6e8,
+            turnover=4.0,
+            vol_ratio_5=9.0,
+            s_vol_spike=1,
+            s_kdj_golden=0,
+            kdj_j=20.0,
+        ),
+        # 放量滞涨（涨幅 1% < 3%）→ 同样不算
+        dict(
+            secid="1.600003",
+            code="600003",
+            name="放量滞涨",
+            board="sh_main",
+            pct_chg=1.0,
+            amount=7e8,
+            turnover=2.0,
+            vol_ratio_5=8.0,
+            s_vol_spike=1,
+            s_kdj_golden=0,
+            kdj_j=30.0,
+        ),
+    ]
+    for index in range(30):  # 造够 30 只命中：默认必须全给，不能只给前 N
+        rows.append(
+            dict(
+                secid=f"0.3000{index:02d}",
+                code=f"3000{index:02d}",
+                name=f"金叉{index}",
+                board="sz_gem",
+                pct_chg=2.0,
+                amount=1e8,
+                turnover=5.0,
+                vol_ratio_5=1.0,
+                s_vol_spike=0,
+                s_kdj_golden=1,
+                kdj_j=60.0,
+            )
+        )
+    digest = build_digest(_Store(_signals_frame(rows)), cfg, "2026-10-14")
+    assert digest["totals"]["放量大涨"] == 1
+    assert [s["名称"] for s in digest["views"]["放量大涨"]] == ["放量上涨"]
+    assert digest["totals"]["KDJ金叉"] == 31
+    assert len(digest["views"]["KDJ金叉"]) == 31  # 不抽样
+    # 口径随配置生成，AI 能读到"只显示涨幅 ≥ 3%"这层过滤
+    assert "涨幅 ≥ 3.0%" in digest["口径"]["放量大涨"]
+    assert digest["views_stats"]["KDJ金叉"]["只数"] == 31
+
+
+def test_digest_can_limit_and_include_universe(tmp_path):
+    """想省 token 可以限定前 N 只；需要时还能把全市场简表一起喂给 AI。"""
+    cfg = make_cfg(tmp_path, {"summary": {"top_symbols": 5, "include_universe": True}})
+    rows = [
+        dict(
+            secid=f"1.6000{index:02d}",
+            code=f"6000{index:02d}",
+            name=f"票{index}",
+            board="sh_main",
+            pct_chg=4.0 + index,
+            amount=1e8 * (index + 1),
+            turnover=2.0,
+            vol_ratio_5=3.0,
+            s_vol_spike=1,
+            s_macd_golden=0,
+            s_kdj_golden=0,
+            signals="vol_spike,",
+        )
+        for index in range(12)
+    ]
+    digest = build_digest(_Store(_signals_frame(rows)), cfg, "2026-10-14")
+    assert digest["totals"]["放量大涨"] == 12
+    assert len(digest["views"]["放量大涨"]) == 5
+    assert len(digest["全市场简表"]) == 12
+    assert digest["全市场简表"][0]["命中"] == "vol_spike,"
+    text = summary_mod.digest_text(digest, top_n=5)
+    assert "前 5 只" in text
+    assert "全部" in summary_mod.digest_text(digest, top_n=0)
+
+
+def test_digest_for_store_keeps_lists_out_of_the_database(tmp_path):
+    """AI 看全量，但落库的 digest 只留统计 + 少量代表个股，别把几千行 JSON 存进库。"""
+    from emscan.summary import digest_for_store
+
+    digest = {
+        "date": "2026-10-14",
+        "totals": {"放量大涨": 148},
+        "views": {"放量大涨": [{"代码": f"6000{index:02d}"} for index in range(148)]},
+        "全市场简表": [{"代码": f"6000{index:02d}"} for index in range(5000)],
+    }
+    lean = digest_for_store(digest)
+    assert lean["totals"] == {"放量大涨": 148}
+    assert lean["views"]["放量大涨"]["只数"] == 148
+    assert len(lean["views"]["放量大涨"]["代表"]) == 20
+    assert lean["全市场简表"]["只数"] == 5000
+    assert len(json.dumps(lean, ensure_ascii=False)) < 5000

@@ -3,7 +3,7 @@
 流程（只在当天数据齐全后跑，默认 17:00 之后，见 config 的 summary.only_after）：
 
     build_digest()   从 daily_signals 缓存里抽出：各按钮命中数、板块分布、多信号共振个股、
-                     每个按钮的代表个股与关键指标（整齐化、控制长度）
+                     每个按钮的**全部**命中个股与关键指标、整体统计、筛选口径
     rule_summary()   不调 AI 时的兜底：用上面的数据直接拼一份 Markdown
     call_deepseek()  有 DEEPSEEK_API_KEY 时，把摘要丢给 DeepSeek 生成"全面一点"的复盘
     generate_summary()/write_summary_files()  落库（daily_summary 表）+ 写 data/reports/summary_<日期>.md
@@ -25,6 +25,7 @@ import requests
 
 from .store import Store
 from .tzutil import now_hm
+from .views import view_criteria, vol_up_mask
 
 log = logging.getLogger("emscan")
 
@@ -55,18 +56,50 @@ VIEW_METRICS = {
     "s_reversal": ("rev_signals", "证据"),
 }
 
-PROMPT = """你是 A 股复盘分析师。下面是程序在 {date} 收盘后扫描出的结构化结果（来自本地行情库，仅包含命中个股）。
-请基于**这些数据**写一份中文复盘，Markdown 格式，400~800 字，包含：
-1. 今日主线与板块集中度（哪些板块/行业明显扎堆，占命中比例多少）；
-2. 结构性特征（涨跌幅分布、量能形态：是低位反转、还是高位放量加速）；
-3. 多信号共振个股（同时命中多个按钮的，重点提示）；
-4. 反转信号（缩量止跌）名单里，哪些位置更低、证据更多；
-5. 需要进一步核实的点与风险提示（例如""板块集体异动可能与消息面有关，需自行核实""）。
-要求：只依据给定数据分析，**不要编造新闻、公告或具体事件**；数据没有的就直说""数据未提供""；
-数字要与给定数据一致。""".strip()
+PROMPT = """你是 A 股复盘分析师。下面是程序在 {date} 收盘后扫描出的结构化结果（来自本地行情库，
+只包含信号命中的个股，**是全量、没有抽样**；每个按钮附带筛选口径和整体统计，请严格按口径理解数据，
+不要自行脑补定义。命中多的时候不要只盯前几只，比例、分布、集中度都自己算。
 
-DIGEST_SCHEMA = """说明：每个按钮下列出命中最多的前 {n} 只；""共振""= 同时命中 ≥2 个按钮。
-"""
+请基于**这些数据**写一份中文复盘，Markdown 格式，**1500~3000 字**，宁长勿短、信息密度要高，
+不要写"整体中性、注意风险"这类空话。按下面的结构写：
+
+## 一、今日全景
+命中总数、六个按钮各自的命中数（把它读成市场结构，而不是一个一个报数）、涨跌幅分布说明了什么
+（普涨/普跌/分化、跌停与跌幅超 5% 的规模）、量能与位置的组合含义（是低位止跌、还是高位放量加速）。
+
+## 二、板块与结构
+按给到的板块口径（沪主板/深主板/创业板/科创板/北交所）比较各按钮命中的分布差异，指出集中在哪里、
+意味着什么（例如超跌贴下轨更集中在双创，说明什么）。若数据里没有行业分类，明确写"行业维度数据未提供"，
+**不要编造行业、题材、赛道归属**。
+
+## 三、逐个按钮解读
+每个按钮单独一小段（有命中的至少 200 字；当日 0 只命中的也要写一段，说明"0 只说明什么"）：
+名单整体特征、量价形态、**点名 3~5 只个股并带上给定数据里的具体数字**（量比5、DIFF、J 值、
+布林位置、箱体位置、反转分与证据等）、这批票适合短线博弈还是先观察、以及名单里的反例
+（例如放量大涨中出现滞涨或冲高回落的样本）。
+
+## 四、多信号共振
+逐个点评同时命中 ≥2 个按钮的个股：命中了哪几个按钮、为什么这个组合更值得跟踪、结合数字给出强弱排序。
+
+## 五、反转信号质量排序
+把反转信号名单按"证据条数 + 位置高低"分成三档（值得优先跟踪 / 观察 / 证据不足），点名个股并写清依据。
+
+## 六、风险提示与跟踪清单
+本次数据的局限（未提供行业、资金流向、公告新闻；指标只基于日线收盘价）、容易误判的地方
+（布林下轨数量多≠马上反转、KDJ 金叉在下跌趋势中容易钝化、放量大涨里滞涨样本的含义），
+最后给出 **3~8 条可执行的跟踪清单**：看什么、什么条件算确认、什么条件算否证。
+
+硬性要求：
+- 只依据给定数据分析，**不要编造新闻、公告、事件、行业、资金流向**；数据没有的就写"数据未提供"。
+- 所有数字必须与给定数据一致，引用个股时带上数字，不要只写"表现强势"。
+- 允许对信号强弱做排序、取舍和结论性判断（这是复盘的价值所在），但要说清依据是哪些数字。
+- 放量大涨 = 突然放量 **且** 当日上涨（见口径），名单里不该有放量下跌的票；若数据与口径不符，
+  直接指出这个矛盾，不要替它圆场。""".strip()
+
+DIGEST_SCHEMA_COMMON = """\
+说明：""口径"" 是每个按钮的筛选条件（严格按口径理解数据，不要自行脑补定义）；
+""views_stats"" 是同一批票的整体统计（中位数/区间/上涨比例/成交额合计）；
+""共振个股""= 同时命中 ≥2 个按钮。"""
 
 
 def _num(value: Any) -> Optional[float]:
@@ -77,21 +110,68 @@ def _num(value: Any) -> Optional[float]:
     return None if number != number else number
 
 
+def _median(values: List[float]) -> Optional[float]:
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return round(ordered[middle], 2)
+    return round((ordered[middle - 1] + ordered[middle]) / 2, 2)
+
+
+def _view_stats(hit: List[Dict[str, Any]], metric_key: str, metric_label: str) -> Dict[str, Any]:
+    """每个按钮的横向统计，让 AI 有"整体画像"可讲，而不是只能点名个股。"""
+    pcts = [p for p in (_num(r.get("pct_chg")) for r in hit) if p is not None]
+    turnovers = [t for t in (_num(r.get("turnover")) for r in hit) if t is not None]
+    amounts = [a for a in (_num(r.get("amount")) for r in hit) if a is not None]
+    metrics = [m for m in (_num(r.get(metric_key)) for r in hit) if m is not None]
+    stats = {
+        "只数": len(hit),
+        "涨跌幅中位数%": _median(pcts),
+        "涨跌幅区间%": [min(pcts), max(pcts)] if pcts else None,
+        "上涨比例%": round(100.0 * sum(1 for p in pcts if p > 0) / len(pcts), 1) if pcts else None,
+        "换手中位数%": _median(turnovers),
+        "成交额合计亿": round(sum(amounts) / 1e8, 1) if amounts else None,
+        metric_label + "中位数": _median(metrics),
+    }
+    return {k: v for k, v in stats.items() if v is not None}
+
+
 def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None) -> Dict[str, Any]:
-    """从缓存里抽一份"紧凑但全面"的当日摘要（给 AI 或直接出兜底总结）。"""
-    n = int(top_n or cfg.get("summary.top_symbols", 15) or 15)
+    """从缓存里抽一份当日摘要（给 AI 或直接出兜底总结）。
+
+    **默认不抽样**：每个按钮有多少命中就给 AI 多少（``summary.top_symbols: 0``）。
+    上下文 1M、输入又便宜，漏掉个股比多给几千行更亏；想省 token 可以设成正数。
+    """
+    if top_n is None:
+        top_n = int(cfg.get("summary.top_symbols", 0) or 0)
+    n = int(top_n)
     frame = store.load_daily_signals(
         start=str(trade_date), end=str(trade_date), join_symbols=True, limit=20000
     )
-    digest: Dict[str, Any] = {"date": str(trade_date), "totals": {}, "boards": {}, "views": {}}
+    digest: Dict[str, Any] = {
+        "date": str(trade_date),
+        "口径": {label: view_criteria(cfg).get(flag[2:], "") for flag, label in VIEW_LABELS.items()},
+        "totals": {},
+        "boards": {},
+        "views": {},
+        "views_stats": {},
+    }
     if frame is None or frame.empty:
         return digest
 
     rows = frame.to_dict("records")
+    # 放量大涨 = 信号命中 + 当日涨幅 ≥ 门槛（和网页视图同一个口径，别再出现放量下跌的票）
+    vol_up = vol_up_mask(frame, cfg).tolist()
     digest["totals"]["命中股票数"] = len(rows)
     hits_per_symbol: Dict[str, List[str]] = {}
     for flag, label in VIEW_LABELS.items():
-        hit = [r for r in rows if _num(r.get(flag)) == 1]
+        hit = [
+            r
+            for index, r in enumerate(rows)
+            if _num(r.get(flag)) == 1 and (flag != "s_vol_spike" or vol_up[index])
+        ]
         digest["totals"][label] = len(hit)
         if not hit:
             continue
@@ -104,7 +184,9 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
             "s_box_range": lambda r: -(_num(r.get("box_pos")) or 0),
             "s_reversal": lambda r: _num(r.get("rev_score")) or 0,
         }[flag]
-        ranked = sorted(hit, key=lambda r: (boost(r), _num(r.get("amount")) or 0), reverse=True)[:n]
+        ranked = sorted(hit, key=lambda r: (boost(r), _num(r.get("amount")) or 0), reverse=True)
+        if n > 0:  # n<=0：全部命中都给（默认）
+            ranked = ranked[:n]
         digest["views"][label] = [
             {
                 "代码": str(r.get("code") or ""),
@@ -121,6 +203,7 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
             }
             for r in ranked
         ]
+        digest["views_stats"][label] = _view_stats(hit, metric_key, metric_label)
         boards: Dict[str, int] = {}
         for r in hit:
             key = str(r.get("board") or "未知")
@@ -140,7 +223,22 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
         for sid, labels in hits_per_symbol.items()
         if len(labels) >= 2
     ]
-    digest["共振个股"] = sorted(resonance, key=lambda x: len(x["命中按钮"]), reverse=True)[:20]
+    resonance = sorted(resonance, key=lambda x: len(x["命中按钮"]), reverse=True)
+    digest["共振个股"] = resonance[:n] if n > 0 else resonance
+    if bool(cfg.get("summary.include_universe", False)):
+        digest["全市场简表"] = [
+            {
+                "代码": str(r.get("code") or ""),
+                "名称": str(r.get("name") or ""),
+                "板块": str(r.get("board") or ""),
+                "涨跌幅%": round(_num(r.get("pct_chg")) or 0, 2),
+                "成交额亿": round((_num(r.get("amount")) or 0) / 1e8, 2),
+                "换手%": round(_num(r.get("turnover")) or 0, 2),
+                "量比5": round(_num(r.get("vol_ratio_5")) or 0, 2),
+                "命中": str(r.get("signals") or ""),
+            }
+            for r in rows
+        ]
     pcts = [_num(r.get("pct_chg")) for r in rows if _num(r.get("pct_chg")) is not None]
     if pcts:
         digest["涨跌幅分布"] = {
@@ -153,9 +251,33 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
     return digest
 
 
-def digest_text(digest: Dict[str, Any]) -> str:
-    parts = [DIGEST_SCHEMA.format(n=15), json.dumps(digest, ensure_ascii=False, indent=1)]
-    return "\n".join(parts)
+def digest_text(digest: Dict[str, Any], top_n: int = 0) -> str:
+    """把摘要转成给 AI 的文本；``top_n > 0`` 时说明"只给了前 N 只"。"""
+    if top_n > 0:
+        head = f'说明：""views"" 里每个按钮只列出命中最多的前 {top_n} 只（summary.top_symbols 限流）。\n'
+    else:
+        head = '说明：""views"" 里每个按钮列出**全部**命中个股（不抽样）。\n'
+    return head + DIGEST_SCHEMA_COMMON + "\n" + json.dumps(digest, ensure_ascii=False, indent=1)
+
+
+def digest_for_store(digest: Dict[str, Any], keep: int = 20) -> Dict[str, Any]:
+    """落库用的精简版摘要。
+
+    AI 拿的是**全量**命中名单，但没必要把几千行 JSON 再存一份到数据库里
+    （原始数据在 ``daily_signals``），所以库里只留统计口径 + 每个按钮少量代表个股。
+    """
+    lean: Dict[str, Any] = {}
+    for key, value in digest.items():
+        if key == "views":
+            lean["views"] = {
+                label: {"只数": len(items), "代表": items[:keep]}
+                for label, items in value.items()
+            }
+        elif key == "全市场简表":
+            lean["全市场简表"] = {"只数": len(value), "说明": "完整名单见 daily_signals 表"}
+        else:
+            lean[key] = value
+    return lean
 
 
 def rule_summary(digest: Dict[str, Any]) -> str:
@@ -172,6 +294,12 @@ def rule_summary(digest: Dict[str, Any]) -> str:
         lines.append("## 命中个股涨跌幅分布")
         for key, value in digest["涨跌幅分布"].items():
             lines.append(f"- {key}: {value}")
+    if digest.get("views_stats"):
+        lines.append("")
+        lines.append("## 各按钮整体画像")
+        for label, stats in digest["views_stats"].items():
+            detail = "，".join(f"{k} {v}" for k, v in stats.items())
+            lines.append(f"- {label}：{detail}")
     for label, boards in (digest.get("boards") or {}).items():
         if not boards:
             continue
@@ -424,7 +552,12 @@ def generate_summary(
     content = rule_summary(digest)
     if api_key:
         try:
-            prompt = PROMPT.format(date=trade_date) + "\n\n数据如下：\n" + digest_text(digest)
+            top_n = int(cfg.get("summary.top_symbols", 0) or 0)
+            prompt = (
+                PROMPT.format(date=trade_date)
+                + "\n\n数据如下：\n"
+                + digest_text(digest, top_n)
+            )
             ai_text = call_deepseek(cfg, prompt, api_key)
             model = str(cfg.get("summary.model", DEEPSEEK_MODEL) or DEEPSEEK_MODEL)
             if ai_text:
@@ -441,7 +574,7 @@ def generate_summary(
         "date": str(trade_date),
         "engine": engine,
         "content": content,
-        "digest": json.dumps(digest, ensure_ascii=False),
+        "digest": json.dumps(digest_for_store(digest), ensure_ascii=False),
     }
     store.save_summary(record)
     return record
