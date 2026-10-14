@@ -27,7 +27,7 @@ from .mairui import BAR_FIELDS, INDICATOR_MAP
 log = logging.getLogger(__name__)
 
 # 表结构版本号：改 SCHEMA / 迁移逻辑就 +1（init_schema 靠它决定要不要重建）
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9  # 9: 新增 symbol_tags（行业/概念归属）
 
 DAILY_SIGNALS_VIEW = """CREATE VIEW IF NOT EXISTS daily_signals_named AS
 SELECT
@@ -212,6 +212,18 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- 板块归属（行业 / 概念）：一只股票一行一个节点，源数据每周六更新
+CREATE TABLE IF NOT EXISTS symbol_tags (
+    secid      TEXT NOT NULL,
+    kind       TEXT NOT NULL,   -- sw 申万一级 / sw2 申万二级 / gn 概念 / chgn 热门概念 …
+    code       TEXT NOT NULL,   -- 节点代码，如 sw_yx
+    name       TEXT NOT NULL,   -- 节点名称，如 银行
+    updated_at TEXT,
+    PRIMARY KEY (secid, kind, code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_symbol_tags_kind ON symbol_tags(kind, secid);
 
 CREATE TABLE IF NOT EXISTS runs (
     run_id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -508,6 +520,64 @@ class Store:
         )
         self.conn.commit()
         return cur.rowcount
+
+    # ------------------------------------------------------ 板块归属（行业/概念）
+    def replace_symbol_tags(self, kind: str, rows: Iterable[Dict[str, Any]]) -> int:
+        """整类覆盖写：先删这类旧数据，再写新数据（源数据每周整棵更新，避免残留退役节点）。"""
+        payload = []
+        stamp = _now()
+        for row in rows:
+            secid = str(row.get("secid") or "")
+            code = str(row.get("code") or "")
+            if not secid or not code:
+                continue
+            payload.append((secid, str(kind), code, str(row.get("name") or ""), stamp))
+        self.conn.execute("DELETE FROM symbol_tags WHERE kind = ?", (str(kind),))
+        if payload:
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO symbol_tags (secid, kind, code, name, updated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                payload,
+            )
+        self.conn.commit()
+        self.bump_data_version()
+        return len(payload)
+
+    def load_symbol_tags(self, kind: Optional[str] = None) -> pd.DataFrame:
+        """读板块归属（``kind`` 为空=全部类别）。"""
+        sql = "SELECT secid, kind, code, name, updated_at FROM symbol_tags"
+        params: List[Any] = []
+        if kind:
+            sql += " WHERE kind = ?"
+            params.append(str(kind))
+        return pd.read_sql_query(sql, self.conn, params=params)
+
+    def symbol_tag_names(self, kind: str) -> Dict[str, str]:
+        """``kind`` 这类节点的 代码 -> 名称（给界面/日志用）。"""
+        rows = self.conn.execute(
+            "SELECT DISTINCT code, name FROM symbol_tags WHERE kind = ? ORDER BY code", (str(kind),)
+        ).fetchall()
+        return {str(r["code"]): str(r["name"]) for r in rows}
+
+    def symbol_tag_stats(self) -> Dict[str, Dict[str, int]]:
+        """每类节点的统计：``{kind: {"nodes": 节点数, "stocks": 覆盖股票数}}``。"""
+        rows = self.conn.execute(
+            "SELECT kind, COUNT(DISTINCT code) AS nodes, COUNT(DISTINCT secid) AS stocks "
+            "FROM symbol_tags GROUP BY kind"
+        ).fetchall()
+        return {str(r["kind"]): {"nodes": int(r["nodes"]), "stocks": int(r["stocks"])} for r in rows}
+
+    def get_meta(self, key: str) -> Optional[str]:
+        row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (str(key),)).fetchone()
+        return str(row["value"]) if row and row["value"] is not None else None
+
+    def set_meta(self, key: str, value: Any) -> None:
+        self.conn.execute(
+            "INSERT INTO meta(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (str(key), str(value)),
+        )
+        self.conn.commit()
 
     # ------------------------------------------------------ 每日信号缓存（宽表）
     def upsert_daily_signals(self, rows: Iterable[Dict[str, Any]]) -> int:

@@ -1,4 +1,4 @@
-# 麦蕊智数接口速查（本项目用到的 6 类）
+# 麦蕊智数接口速查（本项目用到的 7 类）
 
 数据源文档：<https://www.mairui.club/hsdata>（沪深A股数据）。接口域名 `https://api.mairuiapi.com`
 （同一服务的备用域名 `https://api.mairui.club`），**全部需要证书（licence）**，证书免费领取、
@@ -14,6 +14,7 @@
 | 日频指标 MACD/KDJ/BOLL/MA | `GET .../hsstock/history/{kind}/{code}.{MKT}/d/{adjust}/{licence}` | `mairui.fetch_indicators_many()` |
 | 交易日历 | `GET /tcalendar/list/{year}/{licence}` | `mairui.fetch_trade_calendar()` |
 | 股票基础信息（流通股本/上市日期） | `GET /hsstock/instrument/{code}.{MKT}/{licence}` | `mairui.fetch_instrument_many()` |
+| 行业/概念归属（申万行业、概念板块） | `GET /hszg/list` + `/hszg/gg/{节点}` | `industry.sync_tags()` |
 
 > 所有解析逻辑都是纯函数（`emscan/mairui.py`），并配了用**真实报文**写的单测
 > （`tests/test_mairui_parse.py`），所以没有网络也能回归。
@@ -190,7 +191,43 @@ GET https://api.mairuiapi.com/hsstock/instrument/{code}.{MKT}/{licence}
 * 实测该接口**可能返回 503**（`{"code":503,"message":"upstream unavailable"}`），
   属于上游偶发不可用，本项目按单只失败跳过，不影响主流程。
 
-## 7. 踩坑记录（真实踩过的）
+## 7. 指数、行业、概念（板块归属）
+
+复盘里要讲"今天异动集中在哪些行业"，靠的是这一组接口（**不需要 Pro 档**，公开演示证书实测可用）：
+
+| 用途 | 接口 | 本项目里的位置 |
+| --- | --- | --- |
+| 指数、行业、概念树（叶子节点才带成分股） | `GET /hszg/list/{licence}` | `mairui.fetch_tag_tree()` |
+| 某个行业/概念下的全部股票 | `GET /hszg/gg/{节点代码}/{licence}` | `mairui.fetch_tag_members_many()`（默认走它） |
+| 某只股票挂在哪些指数/行业/概念下 | `GET /hszg/zg/{股票代码}/{licence}` | `mairui.fetch_tags_of_stock()`（概念多时才有必要） |
+
+节点代码前缀就是类别（`TAG_KINDS`）：
+
+```
+sw_*     申万一级行业 31 个       sw2_*    申万二级行业 131 个
+hangye*  证监会行业 90 个         gn_*     概念板块 214 个
+chgn_*   热门概念 698 个          diyu_*   地域板块 31 个
+```
+
+响应样例（真实报文）：
+
+```json
+[{"name": "A股-申万行业-煤炭", "code": "sw_mt", "pcode": "swhy", "isleaf": 1}]
+[{"dm": "601857", "mc": "中国石油", "jys": "sh"}, {"dm": "920088", "mc": "科力股份", "jys": "bj"}]
+[{"code": "sw_yx", "name": "A股-申万行业-银行"}, {"code": "chgn_701320", "name": "A股-热门概念-长期破净"}]
+```
+
+本项目怎么用：
+
+* **按节点批量拉**（`hszg/gg`）：默认只同步申万一级 + 二级（31 + 131 = 162 个请求，
+  300 次/分钟约 35 秒），落进 `symbol_tags(secid, kind, code, name)`；实测一级行业覆盖 5519 只
+  （含北交所）。概念类（`gn`/`chgn` 900+ 个节点）噪音大，要的话加进 `industry.kinds`。
+* **更新频率**：源数据**每周六**更新，所以按 `industry.refresh_days`（默认 7 天）刷新一次，
+  命令是 `python3 -m emscan industry [--force] [--kinds sw,sw2]`，`run` 里也会自动补。
+* **反查**（`hszg/zg`）：一只股票一次请求，适合"只要某几十只票的概念"，全市场用不上。
+* 名称字段带前缀（`A股-申万行业-银行`），落库前取最后一段（`clean_tag_name`）。
+
+## 8. 踩坑记录（真实踩过的）
 
 * **错误体是 `{"code":503,"message":"upstream unavailable"}`** —— 不是 HTTP 状态码，
   客户端必须解析 body 才算成功。

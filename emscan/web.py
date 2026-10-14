@@ -27,6 +27,7 @@ import hmac
 import html
 import json
 import logging
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
@@ -257,7 +258,7 @@ VIEWS: Dict[str, Dict[str, str]] = {
 DEFAULT_VIEW = "vol_spike"
 
 # 每个按钮的表格列：基础信息 + 该按钮相关的指标（不再所有视图共用一张大表）
-BASE_COLUMNS = ("code", "name", "board", "close", "pct_chg", "amount_yi", "turnover")
+BASE_COLUMNS = ("code", "name", "board", "industry", "close", "pct_chg", "amount_yi", "turnover")
 VIEW_COLUMNS: Dict[str, tuple] = {
     "vol_spike": BASE_COLUMNS + ("vol_ratio_5", "vol_ratio_20", "vol_z60", "vol_signal"),
     "macd_golden": BASE_COLUMNS + ("macd_diff", "macd_dea", "macd_bar"),
@@ -289,6 +290,7 @@ COLUMNS: Tuple[Tuple[str, str, Optional[str], bool], ...] = (
     ("code", "代码", None, True),
     ("name", "名称", None, True),
     ("board", "板块", None, True),
+    ("industry", "行业", None, True),
     ("close", "收盘价", "{:.2f}", True),
     ("pct_chg", "涨跌幅%", "{:+.2f}", True),
     ("amount_yi", "成交额(亿)", "{:.2f}", True),
@@ -351,15 +353,32 @@ SYMBOL_SORT_COLUMNS = {"code": "s.code", "name": "s.name", "board": BOARD_SORT_S
 SORT_COLUMN_SQL = {"amount_yi": "d.amount"}
 
 
+def _industry_kind(store: Store) -> str:
+    """页面上"行业"列用哪一类节点：优先申万一级，其次二级/证监会行业；没同步过就返回空。"""
+    try:
+        for kind in ("sw", "sw2", "hangye"):
+            row = store.conn.execute(
+                "SELECT 1 FROM symbol_tags WHERE kind = ? LIMIT 1", (kind,)
+            ).fetchone()
+            if row:
+                return kind
+    except sqlite3.Error as exc:  # 老库没有这张表也能正常出页面
+        log.debug("读行业归属失败：%s", exc)
+    return ""
+
+
 def sort_expression(key: str) -> str:
     """把展示列名翻成 SQL 表达式（白名单之外的调用方已挡掉）。"""
+    if key == "industry":
+        return "industry"  # 行业列来自 join 出来的别名
     if key in SYMBOL_SORT_COLUMNS:
         return SYMBOL_SORT_COLUMNS[key]
     return SORT_COLUMN_SQL.get(key, "d." + key)
 
 
 # 页面内容只取决于"缓存里有什么"，同一天里反复看同一页不必重算：
-# 键 = (数据版本, 查询参数)，数据一变（computed_at 变了）自动失效。
+# 键 = (库路径, 数据版本, 查询参数)，数据一变（computed_at 变了）自动失效。
+# 库路径必须进键：换一个数据库（测试/多库部署）时数据版本可能撞车，缓存会串页。
 _CACHE: Dict[Tuple[Any, ...], "PageContext"] = {}
 _CACHE_LOCK = threading.Lock()
 _CACHE_MAX = 128
@@ -535,6 +554,7 @@ def build_context(
 
     version = _data_version(store) if use_cache else None
     cache_key = (
+        str(store.path),
         version,
         view_key,
         page_date,
@@ -598,7 +618,22 @@ def build_context(
         where.append("(UPPER(IFNULL(s.code, '')) LIKE ? OR UPPER(IFNULL(s.name, '')) LIKE ?)")
         params.extend([like, like])
     clause = " AND ".join(where)
-    source = "FROM daily_signals_named d LEFT JOIN symbols s ON s.secid = d.secid WHERE " + clause
+    # 行业归属（symbol_tags）左连接：一只股票只取一个节点（MIN+GROUP BY 兜住"概念有多个"的情况）
+    industry_kind = _industry_kind(store)
+    industry_join = (
+        "LEFT JOIN (SELECT secid, MIN(name) AS industry FROM symbol_tags "
+        "WHERE kind = ? GROUP BY secid) t ON t.secid = d.secid"
+        if industry_kind
+        else ""
+    )
+    source = (
+        "FROM daily_signals_named d LEFT JOIN symbols s ON s.secid = d.secid "
+        + industry_join
+        + " WHERE "
+        + clause
+    )
+    if industry_kind:
+        params = [industry_kind] + params
 
     ctx.total = int(
         store.conn.execute("SELECT COUNT(*) AS n " + source, params).fetchone()["n"] or 0
@@ -607,7 +642,8 @@ def build_context(
         sort_sql = sort_expression(ctx.sort)
         direction = "ASC" if ctx.order == "asc" else "DESC"
         rows = store.conn.execute(
-            "SELECT d.*, s.code AS code, s.name AS name, s.board AS board "
+            "SELECT d.*, s.code AS code, s.name AS name, s.board AS board, "
+            + ("t.industry AS industry " if industry_kind else "NULL AS industry ")
             + source
             + " ORDER BY ("
             + sort_sql
@@ -1110,6 +1146,9 @@ def render_html(
         )
 
     view_columns = VIEW_COLUMNS.get(ctx.view) or tuple(k for k, _, _, _ in COLUMNS)
+    # 没有同步过行业归属（emscan industry）时不显示空的"行业"列
+    if "industry" in view_columns and not any(row.get("industry") for row in ctx.rows):
+        view_columns = tuple(key for key in view_columns if key != "industry")
     _by_key = {c[0]: c for c in COLUMNS}
     active_columns = [_by_key[key] for key in view_columns if key in _by_key]
     head_cells = []

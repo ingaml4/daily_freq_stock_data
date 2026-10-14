@@ -41,6 +41,7 @@ bash scripts/daily_scan.sh                  # 以后每天由 cron 跑这一条
 | `python3 -m emscan signals [--rules ...] [--trade-date ...]` | 用本地数据筛指标信号 |
 | `python3 -m emscan box [--trade-date ...]` | 筛**箱体震荡 + 换手健康**的票（做 T 备选池） |
 | `python3 -m emscan doji [--trade-date ...]` | 筛**低位缩量十字星**（超跌企稳观察信号） |
+| `python3 -m emscan industry [--force] [--kinds sw,sw2]` | 同步**行业/概念归属**（复盘"行业维度"靠它，源数据每周六更新） |
 | `python3 -m emscan hits [--date ...] [--secid ...] [--only ...]` | **查每日信号缓存**（四个主信号，不联网、秒回） |
 | `python3 -m emscan summary [--force] [--force-rule]` | 生成当日复盘总结（有 `DEEPSEEK_API_KEY` 走 AI，没有就出规则版） |
 | `python3 -m emscan web [--host ...] [--port ...] [--password ...]` | **起网页端**：四个查询按钮 + 可排序表格（口令登录，代码跳雪球） |
@@ -52,7 +53,7 @@ bash scripts/daily_scan.sh                  # 以后每天由 cron 跑这一条
 
 ## 数据表粒度：一行到底是什么
 
-一共 4 张业务表，粒度和用途都不一样（`data/market.sqlite`，`sqlite3` 直接就能查）：
+一共 5 张业务表，粒度和用途都不一样（`data/market.sqlite`，`sqlite3` 直接就能查）：
 
 | 表 | 一行 = | 字段 | 谁写 |
 | --- | --- | --- | --- |
@@ -60,6 +61,7 @@ bash scripts/daily_scan.sh                  # 以后每天由 cron 跑这一条
 | `bars` | **一只股票 × 一个交易日**（日线行情） | `secid, date, open, high, low, close, volume(手), amount(元), amplitude(%), pct_chg(%), chg(元), turnover(%), float_mv, volume_ratio, source` | 当日快照 / 历史回补 |
 | `indicators` | **一只股票 × 一个交易日**（技术指标原始值） | `secid, date, macd_diff/macd_dea/macd_bar, kdj_k/kdj_d/kdj_j, boll_upper/boll_mid/boll_lower, ma5/ma10/ma20/ma60, source` | 麦蕊指标接口 |
 | `daily_signals` | **一只股票 × 一个交易日（宽表：行情 + 放量 + 指标 + 信号标记）** | 见下 | `scan` 写放量那几列，`signals` 写指标与标记那几列 |
+| `symbol_tags` | **一只股票 × 一个行业/概念节点**（归属，源数据每周六更新） | `secid, kind(sw/sw2/gn…), code, name, updated_at` | `industry`（`run` 里按周自动补） |
 
 `daily_signals` 一行 41 列，就是"当天这只票的全部结论"：
 
@@ -77,6 +79,23 @@ computed_at
 
 另外有张视图 `daily_signals_named`，把 0/1 标记拼成 `signals` 文本列（如
 `vol_spike,macd_golden`），方便任何 SQL 客户端/看板直接读。
+
+## 行业 / 概念归属（复盘里的"行业维度"）
+
+网页的"板块"只有交易所口径（沪主板/创业板/科创板…），讲不出"今天放量集中在电子、机械设备"。
+麦蕊有一组板块接口（**不需要 Pro 档**）能补上：
+
+```
+python3 -m emscan industry                 # 同步申万一级+二级行业（约 160 个请求，30~60 秒）
+python3 -m emscan industry --kinds sw,gn,chgn   # 再加上概念板块 / 热门概念（900+ 节点，约 3 分钟）
+python3 -m emscan industry --force         # 没到刷新周期也重拉
+```
+
+* 源数据**每周六**更新，所以按 `industry.refresh_days`（默认 7 天）刷新，`emscan run` 会自动补；
+  实测申万一级 31 个节点覆盖 5519 只（含北交所）。
+* 落 `symbol_tags(secid, kind, code, name)`：一只股票一行一个节点。网页多出一列**行业**（可排序，
+  没同步过就不显示这一列），复盘的每个按钮会附**行业分布**，AI 就能回答"是不是一两个行业集体异动"。
+* 概念类（`gn`/`chgn` 900+ 节点）噪音大，默认不开；要按概念聚类时再加进 `industry.kinds`。
 
 ## 四个主信号：怎么算、什么时候算、能不能缓存
 
@@ -354,6 +373,8 @@ A股日频指标信号 | 交易日 2026-10-12
 给 AI 的数据是**全量**的：`summary.top_symbols: 0`（默认）表示每个按钮有多少只命中就给它多少只，
 不做抽样、不截断；每个按钮还附带整体统计（涨跌幅中位数/区间、上涨比例、换手中位数、成交额合计、指标中位数）
 和**筛选口径**（和网页悬浮提示同一份，见 `emscan/views.py`），避免 AI 把"放量大涨"理解成放量下跌。
+每只票还带**行业**（先跑一次 `python3 -m emscan industry`），所以复盘能直接说清"异动集中在哪几个行业、
+占比多少、是扎堆还是全市场散点"，而不再写一句"行业维度数据未提供"。
 想省 token 可以把 `top_symbols` 设成正数；再加 `include_universe: true` 还会把"全市场简表"
 （缓存里所有股票的涨跌幅/成交额/换手/量比/命中标记）一起喂进去——1M 上下文塞得下，一般不需要。
 

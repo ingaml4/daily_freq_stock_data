@@ -99,6 +99,13 @@ mairui:
 #   update_times: "15:32,17:15"   # 页面上"系统几点更新"的提示（install_services.sh 会按 --daily-times 写进 env）
 #   page_size: 20       # 表格默认每页行数（网页上还能随时点 10/20/50/100）
 
+# 行业 / 概念归属（复盘里的"行业维度"+ 网页"行业"列）。麦蕊《指数、行业、概念》，不需要 Pro 档
+# industry:
+#   enabled: true
+#   kinds: [sw, sw2]    # sw 申万一级(31) / sw2 申万二级(131) / hangye 证监会行业 / gn 概念 / chgn 热门概念
+#   refresh_days: 7     # 源数据每周六更新：满 N 天才重拉（0=每次 run 都拉）
+#   top_industries: 0   # 复盘每个按钮的行业分布列几个行业（0=全部）
+
 # 收盘复盘总结（网页"当日总结"按钮）。密钥走环境变量 DEEPSEEK_API_KEY（或下面 api_key）
 # summary:
 #   enabled: true

@@ -109,6 +109,16 @@ DEFAULTS: Dict[str, Any] = {
         # 当天指标还没发布时，是否允许退回用最近一个交易日出报告（默认允许，日志会写明）
         "require_trade_date": False,
     },
+    # 行业 / 概念归属（麦蕊《指数、行业、概念》：复盘里的"行业维度"靠它）
+    "industry": {
+        "enabled": True,
+        # sw=申万一级(31) sw2=申万二级(131) hangye=证监会行业 gn=概念板块 chgn=热门概念 diyu=地域
+        "kinds": ["sw", "sw2"],
+        # 源数据每周六更新：距上次同步满 N 天才刷新（0=每次 run 都刷）
+        "refresh_days": 7,
+        # 每个按钮"行业分布"里最多列几个行业（0=全部）
+        "top_industries": 0,
+    },
     # 箱体震荡 + 换手健康（做 T 备选池）——判定口径见 emscan/box.py 顶部注释
     "box": {
         "enabled": True,

@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from .industry import display_map as _industry_map
 from .store import Store
 from .tzutil import now_hm
 from .views import view_criteria, vol_up_mask
@@ -56,6 +57,8 @@ VIEW_METRICS = {
     "s_reversal": ("rev_signals", "证据"),
 }
 
+INDUSTRY_TOP = "行业分布"
+
 PROMPT = """你是 A 股复盘分析师。下面是程序在 {date} 收盘后扫描出的结构化结果（来自本地行情库，
 只包含信号命中的个股，**是全量、没有抽样**；每个按钮附带筛选口径和整体统计，请严格按口径理解数据，
 不要自行脑补定义。命中多的时候不要只盯前几只，比例、分布、集中度都自己算。
@@ -68,9 +71,16 @@ PROMPT = """你是 A 股复盘分析师。下面是程序在 {date} 收盘后扫
 （普涨/普跌/分化、跌停与跌幅超 5% 的规模）、量能与位置的组合含义（是低位止跌、还是高位放量加速）。
 
 ## 二、板块与结构
-按给到的板块口径（沪主板/深主板/创业板/科创板/北交所）比较各按钮命中的分布差异，指出集中在哪里、
-意味着什么（例如超跌贴下轨更集中在双创，说明什么）。若数据里没有行业分类，明确写"行业维度数据未提供"，
-**不要编造行业、题材、赛道归属**。
+这一节是复盘的重点，写两遍：
+① **交易所板块口径**（沪主板/深主板/创业板/科创板/北交所）：比较各按钮命中的分布差异，指出集中在
+哪里、意味着什么（例如超跌贴下轨更集中在双创说明什么）。
+② **行业口径**（数据里每只股票都带"行业"字段，来自申万一级/二级行业分类；另有"行业分布"给出每个按钮
+的行业只数）：找出扎堆最明显的 3~5 个行业，算清它们在各自按钮里的占比，并回答"这是一两个行业的
+集体异动，还是全市场普跌/普涨背景下的分散信号"；如果同一行业的命中票扎堆且涨幅一致，要点明这更像
+消息面驱动的板块行情（但**不要编造具体新闻、政策、公告**，只描述数据特征并提示"需自行核实消息面"）；
+若某按钮命中虽然多、但行业极度分散，也要明确指出这说明没有主线。
+如果数据里确实没有行业字段（未同步行业归属），就明确写"行业维度数据未提供"，**不要编造行业、
+题材、赛道归属**。
 
 ## 三、逐个按钮解读
 每个按钮单独一小段（有命中的至少 200 字；当日 0 只命中的也要写一段，说明"0 只说明什么"）：
@@ -99,7 +109,8 @@ PROMPT = """你是 A 股复盘分析师。下面是程序在 {date} 收盘后扫
 DIGEST_SCHEMA_COMMON = """\
 说明：""口径"" 是每个按钮的筛选条件（严格按口径理解数据，不要自行脑补定义）；
 ""views_stats"" 是同一批票的整体统计（中位数/区间/上涨比例/成交额合计）；
-""共振个股""= 同时命中 ≥2 个按钮。"""
+""行业分布"" 是每个按钮命中的行业只数（行业口径见 ""行业口径""；未同步时没有这个字段）；
+""views"" 里每只股票都带 ""行业"" 字段，""共振个股""= 同时命中 ≥2 个按钮。"""
 
 
 def _num(value: Any) -> Optional[float]:
@@ -138,6 +149,22 @@ def _view_stats(hit: List[Dict[str, Any]], metric_key: str, metric_label: str) -
     return {k: v for k, v in stats.items() if v is not None}
 
 
+def _industry_counts(
+    rows: List[Dict[str, Any]], industry: Dict[str, str], limit: int = 0
+) -> Dict[str, int]:
+    """一组个股的行业分布（按只数降序，没归属的算"未分类"）。"""
+    counter: Dict[str, int] = {}
+    for row in rows:
+        name = industry.get(str(row.get("secid")), "") or "未分类"
+        counter[name] = counter.get(name, 0) + 1
+    ordered = dict(sorted(counter.items(), key=lambda kv: (-kv[1], kv[0])))
+    if limit and len(ordered) > limit:
+        head = dict(list(ordered.items())[:limit])
+        head["其他"] = sum(list(ordered.values())[limit:])
+        return head
+    return ordered
+
+
 def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None) -> Dict[str, Any]:
     """从缓存里抽一份当日摘要（给 AI 或直接出兜底总结）。
 
@@ -157,22 +184,30 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
         "boards": {},
         "views": {},
         "views_stats": {},
+        INDUSTRY_TOP: {},
     }
     if frame is None or frame.empty:
         return digest
 
     rows = frame.to_dict("records")
+    industry_label, industry = _industry_map(store, cfg)
+    if industry_label:
+        digest["行业口径"] = industry_label
+    top_industries = int(cfg.get("industry.top_industries", 0) or 0)
     # 放量大涨 = 信号命中 + 当日涨幅 ≥ 门槛（和网页视图同一个口径，别再出现放量下跌的票）
     vol_up = vol_up_mask(frame, cfg).tolist()
     # 注意：这是当日**扫描**（缓存里有行）的股票数，不是命中数——命中数按按钮分别算
     digest["totals"]["扫描股票数"] = len(rows)
     hits_per_symbol: Dict[str, List[str]] = {}
+    hit_indexes: set = set()  # 至少命中一个按钮的行（算整体行业分布用）
     for flag, label in VIEW_LABELS.items():
-        hit = [
-            r
+        pairs = [
+            (index, r)
             for index, r in enumerate(rows)
             if _num(r.get(flag)) == 1 and (flag != "s_vol_spike" or vol_up[index])
         ]
+        hit = [r for _, r in pairs]
+        hit_indexes.update(index for index, _ in pairs)
         digest["totals"][label] = len(hit)
         if not hit:
             continue
@@ -193,6 +228,7 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
                 "代码": str(r.get("code") or ""),
                 "名称": str(r.get("name") or ""),
                 "板块": str(r.get("board") or ""),
+                "行业": industry.get(str(r.get("secid")), ""),
                 "涨跌幅%": round(_num(r.get("pct_chg")) or 0, 2),
                 "成交额亿": round((_num(r.get("amount")) or 0) / 1e8, 2),
                 "换手%": round(_num(r.get("turnover")) or 0, 2),
@@ -204,6 +240,8 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
             }
             for r in ranked
         ]
+        if industry:
+            digest[INDUSTRY_TOP][label] = _industry_counts(hit, industry, top_industries)
         digest["views_stats"][label] = _view_stats(hit, metric_key, metric_label)
         boards: Dict[str, int] = {}
         for r in hit:
@@ -226,6 +264,10 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
     ]
     resonance = sorted(resonance, key=lambda x: len(x["命中按钮"]), reverse=True)
     digest["共振个股"] = resonance[:n] if n > 0 else resonance
+    if industry:
+        # 至少命中一个按钮的股票（去重）按行业汇总：直接回答"今天异动集中在哪些行业"
+        hit_rows = [r for index, r in enumerate(rows) if index in hit_indexes]
+        digest["行业分布_全部命中"] = _industry_counts(hit_rows, industry, top_industries)
     if bool(cfg.get("summary.include_universe", False)):
         digest["全市场简表"] = [
             {
@@ -301,6 +343,17 @@ def rule_summary(digest: Dict[str, Any]) -> str:
         for label, stats in digest["views_stats"].items():
             detail = "，".join(f"{k} {v}" for k, v in stats.items())
             lines.append(f"- {label}：{detail}")
+    if digest.get(INDUSTRY_TOP):
+        lines.append("")
+        lines.append(f"## 行业分布（{digest.get('行业口径', '行业')}）")
+        for label, counts in digest[INDUSTRY_TOP].items():
+            top = "、".join(f"{k} {v}只" for k, v in list(counts.items())[:8])
+            lines.append(f"- {label}：{top}")
+    if digest.get("行业分布_全部命中"):
+        top = "、".join(f"{k} {v}只" for k, v in list(digest["行业分布_全部命中"].items())[:10])
+        lines.append("")
+        lines.append("## 命中最集中的行业（全部命中去重）")
+        lines.append(f"- {top}")
     for label, boards in (digest.get("boards") or {}).items():
         if not boards:
             continue

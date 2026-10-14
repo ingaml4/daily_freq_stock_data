@@ -20,6 +20,7 @@ import logging
 import os
 import time
 from functools import lru_cache
+from typing import Any, Optional
 
 log = logging.getLogger(__name__)
 
@@ -107,6 +108,24 @@ def now_hm() -> str:
 
 def date_of(value: dt.date | dt.datetime) -> str:
     return value.strftime(DATE_FMT)
+
+
+def parse_stamp(value: Any) -> Optional[dt.datetime]:
+    """把 ``YYYY-MM-DD`` / ``YYYY-MM-DD HH:MM:SS`` 解析成**东八区**时间；解析不了返回 None。
+
+    统一走这里，避免用系统本地时区去解释落库时间戳（机器时区不是东八区时会算错天数）。
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        naive = dt.datetime.strptime(text[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        try:
+            naive = dt.datetime.strptime(text[:10], DATE_FMT)
+        except ValueError:
+            return None
+    return naive.replace(tzinfo=_zone())
 
 
 def shift(date: str, days: int) -> str:

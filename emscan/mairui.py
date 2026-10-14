@@ -62,6 +62,21 @@ PATH_INDICATOR = "/hsstock/history/{kind}/{dm}/{level}/{adjust}/{licence}"
 PATH_LATEST = "/hsstock/latest/{dm}/{level}/{adjust}/{licence}"
 PATH_INSTRUMENT = "/hsstock/instrument/{dm}/{licence}"
 PATH_CALENDAR = "/tcalendar/list/{year}/{licence}"
+# 指数、行业、概念（板块归属）：树 -> 某个节点下的成分股 -> 某只股票挂在哪些节点
+PATH_TAG_TREE = "/hszg/list/{licence}"
+PATH_TAG_MEMBERS = "/hszg/gg/{node}/{licence}"
+PATH_TAG_OF_STOCK = "/hszg/zg/{code}/{licence}"
+
+# 板块节点按代码前缀分类（文档：hszg/list 的 code）
+TAG_KINDS: Dict[str, str] = {
+    "sw": "申万一级行业",
+    "sw2": "申万二级行业",
+    "hangye": "证监会行业",
+    "gn": "概念板块",
+    "chgn": "热门概念",
+    "diyu": "地域板块",
+    "zhishu": "指数成分",
+}
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -311,6 +326,88 @@ def _date_param(value: Any) -> Optional[str]:
     if len(digits) < 8 or not digits[:8].isdigit():
         return None
     return digits[:8]
+
+
+# ------------------------------------------------------ 板块归属（行业 / 概念）
+def tag_kind_of(code: Any) -> str:
+    """由节点代码判断它属于哪一类（``sw_yx`` -> 申万一级、``chgn_701320`` -> 热门概念）。"""
+    text = str(code or "").strip()
+    if text.startswith("sw2_"):
+        return "sw2"
+    if text.startswith("sw_"):
+        return "sw"
+    head = text.split("_", 1)[0]
+    return head if head in TAG_KINDS else (head or "other")
+
+
+def clean_tag_name(value: Any) -> str:
+    """``A股-申万行业-银行`` -> ``银行``（取最后一段，去掉"A股-xx-"前缀）。"""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text.split("-")[-1].strip()
+
+
+def parse_tag_tree(payload: Any, kinds: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+    """解析《指数、行业、概念树》``hszg/list``：只留叶子节点（``isleaf=1``）。
+
+    返回 ``[{code, name, kind, parent}]``；``kinds`` 给一组类别前缀做过滤
+    （``sw``=申万一级、``sw2``=申万二级、``gn``=概念板块、``chgn``=热门概念…）。
+    """
+    wanted = {str(k).strip() for k in kinds} if kinds else None
+    rows: List[Dict[str, Any]] = []
+    for item in _as_items(payload):
+        code = str(item.get("code") or "").strip()
+        if not code:
+            continue
+        if str(item.get("isleaf")).strip() not in ("1", "True", "true"):
+            continue
+        kind = tag_kind_of(code)
+        if wanted is not None and kind not in wanted:
+            continue
+        rows.append(
+            {
+                "code": code,
+                "name": clean_tag_name(item.get("name")),
+                "kind": kind,
+                "parent": clean_tag_name(item.get("pname")),
+            }
+        )
+    return rows
+
+
+def parse_tag_members(payload: Any) -> List[Dict[str, Any]]:
+    """解析《根据指数、行业、概念找相关股票》``hszg/gg``：``[{dm, mc, jys}]``。"""
+    rows: List[Dict[str, Any]] = []
+    for item in _as_items(payload):
+        secid = secid_of(item.get("dm"), item.get("jys"))
+        if secid is None:
+            continue
+        rows.append(
+            {
+                "secid": secid,
+                "code": secid.split(".", 1)[1],
+                "name": str(item.get("mc") or "").strip(),
+            }
+        )
+    return rows
+
+
+def parse_tags_of_stock(payload: Any) -> List[Dict[str, Any]]:
+    """解析《根据股票找相关指数、行业、概念》``hszg/zg``：``[{code, name}]``。"""
+    rows: List[Dict[str, Any]] = []
+    for item in _as_items(payload):
+        code = str(item.get("code") or "").strip()
+        if not code:
+            continue
+        rows.append(
+            {
+                "code": code,
+                "kind": tag_kind_of(code),
+                "name": clean_tag_name(item.get("name")),
+            }
+        )
+    return rows
 
 
 def _shares_and_turnover(
@@ -979,6 +1076,56 @@ class MairuiClient:
         if info and not info.get("secid"):
             info["secid"] = secid
         return info
+
+    # ------------------------------------------------- 板块归属（行业 / 概念）
+    def fetch_tag_tree(self, kinds: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+        """《指数、行业、概念树》—— 拿到树里所有叶子节点的代码与名称。"""
+        licence = self._require_licence()
+        payload = self._get_json(self._url(PATH_TAG_TREE.format(licence=licence)))
+        rows = parse_tag_tree(payload, kinds)
+        log.debug("板块树 %s 个节点（过滤后）", len(rows))
+        return rows
+
+    def fetch_tag_members(self, node: str) -> List[Dict[str, Any]]:
+        """某个行业/概念节点下的全部股票（``sw_yx`` -> 银行板块成分股）。"""
+        licence = self._require_licence()
+        payload = self._get_json(
+            self._url(PATH_TAG_MEMBERS.format(node=str(node).strip(), licence=licence))
+        )
+        return parse_tag_members(payload)
+
+    def fetch_tags_of_stock(self, code: str) -> List[Dict[str, Any]]:
+        """某只股票挂在哪些指数/行业/概念下（按股票反查，概念一网打尽）。"""
+        licence = self._require_licence()
+        payload = self._get_json(
+            self._url(PATH_TAG_OF_STOCK.format(code=dm_of(code).split(".")[0], licence=licence))
+        )
+        return parse_tags_of_stock(payload)
+
+    def fetch_tag_members_many(
+        self,
+        nodes: Sequence[Dict[str, Any]],
+        progress: Optional[Callable[[int, int], None]] = None,
+        max_errors: int = 50,
+    ) -> Tuple[Dict[str, List[Dict[str, Any]]], List[Tuple[str, str]]]:
+        """并发拉多个板块的成分股；单个板块失败不影响其余（返回 节点->成分股, 错误）。"""
+        by_node: Dict[str, List[Dict[str, Any]]] = {}
+        errors: List[Tuple[str, str]] = []
+        total = len(nodes)
+        done = 0
+        with ThreadPoolExecutor(max_workers=self.workers) as pool:
+            futures = {pool.submit(self.fetch_tag_members, node["code"]): node for node in nodes}
+            for future in as_completed(futures):
+                node = futures[future]
+                done += 1
+                if progress:
+                    progress(done, total)
+                try:
+                    by_node[str(node["code"])] = future.result()
+                except Exception as exc:
+                    if len(errors) < max_errors:
+                        errors.append((str(node["code"]), f"{type(exc).__name__}: {exc}"))
+        return by_node, errors
 
     def fetch_instrument_many(
         self,

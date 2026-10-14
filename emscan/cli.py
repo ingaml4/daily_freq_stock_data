@@ -33,6 +33,8 @@ import pandas as pd
 from .box import scan_box
 from .summary import generate_summary, is_due as summary_is_due, mode_text as summary_mode_text, summary_after
 from .doji import compute_reversal_features, doji_params
+from .industry import describe as describe_tags
+from .industry import display_map as industry_map
 from .config import Config
 from .demo import synthesize
 from .mairui import (
@@ -681,6 +683,39 @@ def _box_features_for_cache(store: Store, cfg: Config, trade_date: str):
     return features
 
 
+def cmd_industry(cfg: Config, args: argparse.Namespace) -> int:
+    """同步"行业 / 概念归属"（麦蕊《指数、行业、概念》系列接口）。
+
+    源数据每周六更新，所以默认按 ``industry.refresh_days``（7 天）刷新一次；
+    复盘要用它算"今日放量集中在哪些行业"，网页/命令行也能拿它做筛选。
+    """
+    from .industry import configured_kinds, sync_tags
+
+    store = open_store(cfg)
+    client = MairuiClient.from_config(cfg)
+    kinds = configured_kinds(cfg, getattr(args, "kinds", None))
+    log.info(
+        "同步板块归属：%s（%s）",
+        "、".join(kinds),
+        "强制刷新" if getattr(args, "force", False) else "按刷新周期判断",
+    )
+    try:
+        written = sync_tags(
+            store,
+            client,
+            cfg,
+            kinds=kinds,
+            force=bool(getattr(args, "force", False)),
+            progress=_progress("板块"),
+        )
+    finally:
+        store.close()
+        _close(client)
+    if not written:
+        log.info("本次没有需要同步的板块归属（见上面的原因）")
+    return 0
+
+
 def cmd_doji(cfg: Config, args: argparse.Namespace) -> int:
     """筛"低位缩量十字星"（超跌企稳观察信号），并写进每日信号缓存。"""
     store = open_store(cfg)
@@ -946,11 +981,20 @@ def cmd_hits(cfg: Config, args: argparse.Namespace) -> int:
         join_symbols=True,
         limit=int(getattr(args, "limit", 500) or 500),
     )
+    # 行业列（同步过板块归属才有）：跑命令时能直接看出"这批票集中在哪些行业"
+    industry_label, industry = industry_map(store, cfg)
     store.close()
     if frame.empty:
         print(f"（{start} ~ {end} 没有命中任何信号）")
         return 0
 
+    columns = HITS_COLUMNS
+    labels = HITS_LABELS
+    if industry_label:
+        frame["industry"] = frame["secid"].astype(str).map(industry).fillna("")
+        columns = tuple(list(columns[:3]) + ["industry"] + list(columns[3:]))
+        labels = dict(labels)
+        labels["industry"] = industry_label
     frame["amount_yi"] = pd.to_numeric(frame.get("amount"), errors="coerce") / 1e8
     if "signals" in frame.columns:
         frame["signals"] = frame["signals"].fillna("")
@@ -964,7 +1008,7 @@ def cmd_hits(cfg: Config, args: argparse.Namespace) -> int:
         prefix = "任一命中" if any_of else "同时命中"
         summary += f"；筛选条件：{prefix} {rule_text}"
     table = render_table(
-        frame, columns=HITS_COLUMNS, float_formats=HITS_FORMATS, labels=HITS_LABELS
+        frame, columns=columns, float_formats=HITS_FORMATS, labels=labels
     )
     print(f"{summary}\n\n{table}")
 
@@ -1020,6 +1064,19 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
                 max_symbols=_limit(args, cfg),
                 progress=_progress("指标"),
             )
+        # 行业/概念归属：源数据每周六更新，所以这里只在到期时拉一次（约 160 个请求）
+        if bool(cfg.get("industry.enabled", True)):
+            try:
+                from .industry import sync_tags
+
+                sync_tags(
+                    store,
+                    client,
+                    cfg,
+                    progress=_progress("板块"),
+                )
+            except Exception as exc:  # 板块只是锦上添花，失败不该拖垮当天的主流程
+                log.warning("板块归属同步失败（不影响行情与信号）：%s", exc)
         _log_errors(stats)
         log.info("同步阶段完成：%s，耗时 %.1f 秒", stats.note(), time.time() - started)
         store.record_run(
@@ -1178,6 +1235,7 @@ def cmd_check(cfg: Config, args: argparse.Namespace) -> int:
     )
     _print_request_budget(cfg, info)
     print(f"  信号规则：{', '.join(normalize_rules(cfg.get('signals.rules')))}")
+    print(f"  行业/概念归属：{describe_tags(store)}")
     key = str(cfg.get("summary.api_key") or "")
     env_name = str(cfg.get("summary.api_key_env", "DEEPSEEK_API_KEY"))
     where = "环境变量/环境文件" if os.environ.get(env_name) else ("config.yaml" if key else "")
@@ -1361,6 +1419,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_doji = sub.add_parser("doji", help="筛低位缩量十字星（超跌企稳观察）")
     p_doji.add_argument("--trade-date", dest="trade_date", help="交易日 YYYY-MM-DD（默认最新）")
 
+    p_tag = sub.add_parser("industry", help="同步行业/概念归属（复盘里的行业维度靠它）")
+    p_tag.add_argument("--force", action="store_true", help="没到刷新周期也重新拉")
+    p_tag.add_argument(
+        "--kinds",
+        help="要同步的类别：sw(申万一级),sw2(申万二级),hangye(证监会行业),gn(概念板块),"
+        "chgn(热门概念),diyu(地域)",
+    )
+
     p_sum = sub.add_parser("summary", help="生成当日复盘总结（DeepSeek 或规则版）")
     p_sum.add_argument("--trade-date", dest="trade_date", help="交易日 YYYY-MM-DD（默认最新）")
     p_sum.add_argument(
@@ -1451,6 +1517,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "scan": cmd_scan,
         "box": cmd_box,
         "doji": cmd_doji,
+        "industry": cmd_industry,
         "summary": cmd_summary,
         "signals": cmd_signals,
         "hits": cmd_hits,
