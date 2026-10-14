@@ -99,7 +99,7 @@ def _seed(tmp_path, config=None):
                 "secid": "0.000933",
                 "date": date,
                 "close": 12.0,
-                "pct_chg": -3.5,
+                "pct_chg": 5.5,
                 "amount": 2.0e8,
                 "turnover": 5.5,
                 "vol_ratio_5": 9.9,
@@ -141,7 +141,7 @@ def _seed(tmp_path, config=None):
                 "secid": "1.600519",
                 "date": date,
                 "close": 1500.0,
-                "pct_chg": 0.5,
+                "pct_chg": 3.0,
                 "amount": 3.0e9,
                 "turnover": 0.3,
             },
@@ -150,7 +150,7 @@ def _seed(tmp_path, config=None):
                 "secid": "1.600000",
                 "date": date,
                 "close": 5.5,
-                "pct_chg": -1.2,
+                "pct_chg": 4.0,
                 "amount": 3.0e8,
                 "turnover": 8.8,
                 "vol_ratio_5": 2.2,
@@ -190,7 +190,7 @@ def _seed(tmp_path, config=None):
                 "secid": "0.300001",
                 "date": date,
                 "close": 12.3,
-                "pct_chg": 0.9,
+                "pct_chg": 3.2,
                 "amount": 6.0e7,
                 "turnover": 3.3,
                 "vol_ratio_5": 2.9,
@@ -359,7 +359,7 @@ def test_render_html_has_nav_sortable_headers_and_xueqiu_links(tmp_path):
     # 代码超链接跳雪球
     assert 'href="https://www.xueqiu.com/S/SZ000933"' in page
     # 涨跌染色 + 移动端卡片
-    assert 'class="neg"' in page  # 跌为绿色（A 股习惯：涨红跌绿）
+    assert 'class="pos"' in page  # 涨为红色（A 股习惯；"放量大涨"视图里全是上涨的）
     assert 'class="cards"' not in page  # 手机端也是表格，不再用卡片
     # 名称里的 HTML 会被转义（不是当标签渲染）
     ctx2 = build_context(open_store(make_cfg(tmp_path)), view="boll_break_lower", date=date)
@@ -384,7 +384,7 @@ def test_http_server_serves_pages_and_json(tmp_path):
     try:
         with urllib.request.urlopen(f"{base}/", timeout=10) as resp:
             body = resp.read().decode("utf-8")
-            assert resp.status == 200 and "放量" in body
+            assert resp.status == 200 and "放量大涨" in body
             assert "xueqiu.com/S/" in body
         # 视图：页面只认"最新一天 + 默认排序"（排序在浏览器里做，URL 参数不再生效）
         with urllib.request.urlopen(f"{base}/signals/macd_golden", timeout=10) as resp:

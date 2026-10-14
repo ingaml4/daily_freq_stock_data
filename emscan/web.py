@@ -46,8 +46,9 @@ log = logging.getLogger("emscan")
 VIEWS: Dict[str, Dict[str, str]] = {
     "vol_spike": {
         "flag": "s_vol_spike",
-        "nav": "放量",
-        "title": "突然放量",
+        "nav": "放量大涨",
+        "title": "放量大涨（放量且当日涨幅达标，放量下跌不再展示）",
+        "min_pct_chg": True,
         "sort": "amount_yi",
         "order": "desc",
     },
@@ -314,6 +315,7 @@ def build_context(
     latest_only: bool = True,
     today: Optional[str] = None,
     update_times: str = "",
+    vol_up_min_pct: float = 3.0,
 ) -> PageContext:
     """从缓存里取一页数据：按"日期 + 信号"筛，再搜索、排序、截断。
 
@@ -389,6 +391,9 @@ def build_context(
         "COALESCE(d.volume, 1) > 0",  # 明确停牌（volume=0）不显示；NULL 视为"没记录"放行
     ]
     params: List[Any] = [ctx.date]
+    if spec.get("min_pct_chg"):  # 放量大涨：只留当日上涨的，放量下跌/滞涨不展示
+        where.append("COALESCE(d.pct_chg, -999) >= ?")
+        params.append(float(vol_up_min_pct))
     if ctx.query:
         like = "%" + ctx.query.upper() + "%"
         where.append("(UPPER(IFNULL(s.code, '')) LIKE ? OR UPPER(IFNULL(s.name, '')) LIKE ?)")
@@ -1068,6 +1073,7 @@ def make_handler(
     remember_sort: bool = True,
     update_times: str = DEFAULT_UPDATE_TIMES,
     page_size: int = DEFAULT_PAGE_SIZE,
+    vol_up_min_pct: float = 3.0,
 ) -> type:
     """生成一个 ``BaseHTTPRequestHandler`` 子类。
 
@@ -1228,6 +1234,7 @@ def make_handler(
                     limit=int(params.get("limit", limit) or limit),
                     latest_only=not is_api,  # 页面只看最新一天；API 允许指定日期/排序
                     update_times=update_times,
+                    vol_up_min_pct=vol_up_min_pct,
                 )
             except Exception as exc:  # 页面永远要能打开
                 log.exception("网页渲染失败：%s", exc)
