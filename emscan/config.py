@@ -173,9 +173,9 @@ DEFAULTS: Dict[str, Any] = {
         "base_url": "https://api.deepseek.com",
         "model": "deepseek-flash",  # 或 deepseek-v4-pro（更强）；旧名 deepseek-chat 已过时
         "temperature": 0.3,
-        "max_tokens": 4000,
+        "max_tokens": 8000,  # 思考 token 也算在里面，留足余量
         # 需要更强的推理时打开（文档：flash 也支持 thinking）
-        "thinking": False,
+        "thinking": True,  # 复盘是综合判断：默认开思考（想更省就关掉）
         "reasoning_effort": "high",  # 仅 thinking: true 时生效；可填 low / medium / high
         "timeout": 90,
         "top_symbols": 15,  # 每个按钮给 AI 看前 N 只

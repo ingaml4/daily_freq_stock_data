@@ -195,34 +195,45 @@ def rule_summary(digest: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def call_deepseek(cfg, prompt: str, api_key: str) -> str:
-    """调用 DeepSeek（OpenAI 兼容的 /chat/completions）。
-
-    请求参数按官方文档对齐：显式传 ``thinking``（推理 token 会占用 max_tokens，
-    写复盘默认关闭；``summary.thinking: true`` 时额外传 ``reasoning_effort``）。
-    """
-    base = str(cfg.get("summary.base_url", DEEPSEEK_BASE) or DEEPSEEK_BASE).rstrip("/")
-    model = str(cfg.get("summary.model", DEEPSEEK_MODEL) or DEEPSEEK_MODEL)
-    thinking = _thinking(cfg)
+def _build_body(cfg, model: str, prompt: str, thinking: bool) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": float(cfg.get("summary.temperature", 0.3) or 0.3),
-        "max_tokens": int(cfg.get("summary.max_tokens", 4000) or 4000),
+        "max_tokens": int(cfg.get("summary.max_tokens", 8000) or 8000),
         "stream": False,
         "thinking": {"type": "enabled" if thinking else "disabled"},
     }
     if thinking:
         body["reasoning_effort"] = str(cfg.get("summary.reasoning_effort", "high") or "high")
-    resp = requests.post(
-        f"{base}/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json=body,
-        timeout=float(cfg.get("summary.timeout", 90) or 90),
-    )
-    resp.raise_for_status()
-    payload = resp.json()
+    return body
+
+
+def call_deepseek(cfg, prompt: str, api_key: str) -> str:
+    """调用 DeepSeek（OpenAI 兼容的 /chat/completions）。
+
+    复盘是"综合判断"类任务（跨六张名单找主线、排序反转信号质量），所以**默认开思考**
+    （``summary.thinking: true``）并给足 ``max_tokens``（思考 token 也算在里面）。
+    保险起见：思考模式若没返回正文（例如长度被吃满/结构异常），自动关掉思考重试一次。
+    """
+    base = str(cfg.get("summary.base_url", DEEPSEEK_BASE) or DEEPSEEK_BASE).rstrip("/")
+    model = str(cfg.get("summary.model", DEEPSEEK_MODEL) or DEEPSEEK_MODEL)
+    timeout = float(cfg.get("summary.timeout", 120) or 120)
+    url = f"{base}/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    thinking = _thinking(cfg)
+    payload = _post_json(url, headers, _build_body(cfg, model, prompt, thinking), timeout)
     text = extract_text(payload)
+    if not text and thinking:
+        choice = (payload.get("choices") or [{}])[0]
+        log.warning(
+            "思考模式没返回正文（finish_reason=%s usage=%s），自动用 disabled 重试一次",
+            choice.get("finish_reason"),
+            payload.get("usage"),
+        )
+        payload = _post_json(url, headers, _build_body(cfg, model, prompt, False), timeout)
+        text = extract_text(payload)
     if not text:
         choice = (payload.get("choices") or [{}])[0]
         log.warning(
@@ -234,8 +245,21 @@ def call_deepseek(cfg, prompt: str, api_key: str) -> str:
     return text
 
 
+def _post_json(
+    url: str, headers: Dict[str, str], body: Dict[str, Any], timeout: float
+) -> Dict[str, Any]:
+    resp = requests.post(url, headers=headers, json=body, timeout=timeout)
+    resp.raise_for_status()
+    payload = resp.json()
+    return payload if isinstance(payload, dict) else {}
+
+
 def _thinking(cfg) -> bool:
-    return str(cfg.get("summary.thinking", "") or "").lower() in ("1", "true", "yes", "on")
+    """默认开思考（复盘是综合判断类任务）；``summary.thinking: false`` 可关掉。"""
+    value = cfg.get("summary.thinking", True)
+    if value is None:
+        return True
+    return str(value).lower() in ("1", "true", "yes", "on")
 
 
 def extract_text(payload: Any) -> str:
