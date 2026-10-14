@@ -27,7 +27,7 @@ from .mairui import BAR_FIELDS, INDICATOR_MAP
 log = logging.getLogger(__name__)
 
 # 表结构版本号：改 SCHEMA / 迁移逻辑就 +1（init_schema 靠它决定要不要重建）
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 DAILY_SIGNALS_VIEW = """CREATE VIEW IF NOT EXISTS daily_signals_named AS
 SELECT
@@ -44,7 +44,8 @@ SELECT
         CASE WHEN s_ma_dead          THEN 'ma_dead,'          ELSE '' END ||
         CASE WHEN s_boll_upper       THEN 'boll_upper,'       ELSE '' END ||
         CASE WHEN s_boll_break_upper THEN 'boll_break_upper,' ELSE '' END ||
-        CASE WHEN s_box_range        THEN 'box_range,'         ELSE '' END,
+        CASE WHEN s_box_range        THEN 'box_range,'         ELSE '' END ||
+        CASE WHEN s_low_doji         THEN 'low_doji,'          ELSE '' END,
         ','
     ) AS signals
 FROM daily_signals;
@@ -157,12 +158,20 @@ CREATE TABLE IF NOT EXISTS daily_signals (
     box_avg_amplitude  REAL,
     box_extreme_days   INTEGER,
     box_days           INTEGER,
+    -- 低位缩量十字星
+    doji_body          REAL,
+    doji_upper         REAL,
+    doji_lower         REAL,
+    doji_pos           REAL,
+    doji_drawdown      REAL,
+    doji_vol_ratio     REAL,
     -- 信号标记（1=当日命中，0=未命中，NULL=这次没算）
     s_vol_spike        INTEGER,
     s_macd_golden      INTEGER,
     s_kdj_golden       INTEGER,
     s_boll_break_lower INTEGER,
     s_box_range        INTEGER,
+    s_low_doji         INTEGER,
     s_macd_dead        INTEGER,
     s_kdj_dead         INTEGER,
     s_ma_golden        INTEGER,
@@ -285,11 +294,18 @@ DAILY_SIGNAL_COLUMNS: tuple = (
     "box_avg_amplitude",
     "box_extreme_days",
     "box_days",
+    "doji_body",
+    "doji_upper",
+    "doji_lower",
+    "doji_pos",
+    "doji_drawdown",
+    "doji_vol_ratio",
     "s_vol_spike",
     "s_macd_golden",
     "s_kdj_golden",
     "s_boll_break_lower",
     "s_box_range",
+    "s_low_doji",
     "s_macd_dead",
     "s_kdj_dead",
     "s_ma_golden",

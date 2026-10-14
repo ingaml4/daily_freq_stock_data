@@ -40,6 +40,7 @@ bash scripts/daily_scan.sh                  # 以后每天由 cron 跑这一条
 | `python3 -m emscan scan [--trade-date YYYY-MM-DD]` | 用本地数据做放量扫描（可回看历史某天） |
 | `python3 -m emscan signals [--rules ...] [--trade-date ...]` | 用本地数据筛指标信号 |
 | `python3 -m emscan box [--trade-date ...]` | 筛**箱体震荡 + 换手健康**的票（做 T 备选池） |
+| `python3 -m emscan doji [--trade-date ...]` | 筛**低位缩量十字星**（超跌企稳观察信号） |
 | `python3 -m emscan hits [--date ...] [--secid ...] [--only ...]` | **查每日信号缓存**（四个主信号，不联网、秒回） |
 | `python3 -m emscan web [--host ...] [--port ...] [--password ...]` | **起网页端**：四个查询按钮 + 可排序表格（口令登录，代码跳雪球） |
 | `python3 -m emscan demo` | 无网络自检：合成行情跑通"落库→扫描→报告" |
@@ -139,7 +140,25 @@ python3 -m emscan box                       # 出报告（box_<交易日>.csv/xl
 python3 -m emscan hits --only box_range      # 只查缓存里的箱体票
 ```
 
-## 网页端（五个按钮 + 可排序表格）
+## 低位缩量十字星：超跌企稳的观察信号
+
+`emscan doji`（网页第 6 个按钮"低位十字星"）用**比较常见的口径**四条同时满足：
+
+| 条件 | 默认（`config.yaml` 的 `doji:` 段可调） | 说明 |
+| --- | --- | --- |
+| 十字星形态 | 实体 `\|收-开\|/前收 ≤ 0.3%`，且**上下影线**各 ≥ 2 倍实体 | 多空打成平手、盘中有拉锯 |
+| 低位 | 收盘在最近 **60 个交易日**区间的位置 ≤ 0.30（或距 60 日高点回撤 ≥ 20%） | 位置越低越好，结果按位置升序排 |
+| 缩量 | 当日量 ≤ 之前 **5 个有效交易日均量 × 0.6** | 地量是低位十字星的关键 |
+| 可交易 | 成交额 ≥ 2000 万、换手率 ≤ 5%、≥45 根K线、非 ST | 过滤噪声 |
+
+报告/网页给出：`60日位置`、`实体%`、`量/前5日均`、`距60日高点%`，还有当天的收盘/涨跌/成交额/换手。
+
+```bash
+python3 -m emscan doji                      # 出报告 + 写缓存
+python3 -m emscan hits --only low_doji       # 只查缓存里的低位十字星
+```
+
+## 网页端（六个按钮 + 可排序表格）
 
 ```bash
 python3 -m emscan web                          # 打开 http://127.0.0.1:8080/（默认只本机）
@@ -231,6 +250,7 @@ python3 -m emscan web --host 0.0.0.0 --password 我的口令   # 对外暴露：
 ⑥ 放量扫描      scan.py（纯本地计算）        → volscan_<交易日>.csv/xlsx + 写 daily_signals
 ⑦ 指标信号      signals.py（纯本地计算）     → signals_<交易日>.csv/xlsx + 写 daily_signals
 ⑧ 箱体做T       box.py（纯本地计算）          → box_<交易日>.csv/xlsx + 写 daily_signals
+⑨ 低位十字星    doji.py（纯本地计算）         → doji_<交易日>.csv/xlsx + 写 daily_signals
 ```
 
 （③ 排在 ④ 前面是故意的：先用收盘快照把"今天"落库，再比对缺口，就不会为了补今天

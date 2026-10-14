@@ -72,6 +72,13 @@ VIEWS: Dict[str, Dict[str, str]] = {
         "sort": "boll_pos",
         "order": "asc",
     },
+    "low_doji": {
+        "flag": "s_low_doji",
+        "nav": "低位十字星",
+        "title": "低位缩量十字星（超跌企稳，60 日位置越低越靠前）",
+        "sort": "doji_pos",
+        "order": "asc",
+    },
     "box_range": {
         "flag": "s_box_range",
         "nav": "箱体做T",
@@ -109,6 +116,10 @@ COLUMNS: Tuple[Tuple[str, str, Optional[str], bool], ...] = (
     ("box_low", "箱底", "{:.2f}", True),
     ("box_avg_turnover", "日均换手%", "{:.2f}", True),
     ("box_avg_amplitude", "日均振幅%", "{:.2f}", True),
+    ("doji_pos", "60日位置", "{:.2f}", True),
+    ("doji_body", "实体%", "{:.2%}", True),
+    ("doji_vol_ratio", "量/前5日均", "{:.2f}", True),
+    ("doji_drawdown", "距60日高点%", "{:+.1%}", True),
     ("signals_cn", "命中信号", None, False),
 )
 

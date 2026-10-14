@@ -117,6 +117,7 @@ FLAG_LABELS: Dict[str, str] = {
     "s_boll_lower": "触及下轨",
     "s_boll_upper": "触及上轨",
     "s_boll_break_upper": "突破上轨",
+    "s_low_doji": "低位缩量十字星",
 }
 
 # 写进 daily_signals 缓存的列（指标那部分）

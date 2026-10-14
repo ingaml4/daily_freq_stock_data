@@ -122,6 +122,22 @@ DEFAULTS: Dict[str, Any] = {
         "min_valid_days": 35,  # 窗口内有效交易日下限（停牌剔除）
         "top_n": 100,
     },
+    # 低位缩量十字星（判定口径见 emscan/doji.py 顶部注释）
+    "doji": {
+        "enabled": True,
+        "body_ratio": 0.003,  # 实体/前收 上限（0.3%）
+        "shadow_body_multiple": 2.0,  # 上下影线至少是实体的几倍
+        "require_both_shadows": True,
+        "position_window": 60,  # 低位判定窗口（交易日）
+        "max_position": 0.30,  # 收盘在窗口区间的位置上限（0=最低）
+        "max_drawdown_from_high": -0.20,  # 或：距窗口高点回撤 >= 20%
+        "shrink_window": 5,  # 缩量对比的前 N 日均量
+        "shrink_ratio": 0.6,  # 当日量 <= 均量 * 0.6
+        "max_turnover": 5.0,  # 换手率上限（%）——地量通常换手低
+        "min_amount": 20_000_000,  # 成交额下限（元）
+        "min_bars": 45,  # 至少要有 45 根K线（窗口 60 天要有数据才能判低位）
+        "top_n": 100,
+    },
     "web": {
         # 网页端：python3 -m emscan web
         "host": "127.0.0.1",  # 只本机可访问；要对外就改 0.0.0.0（记得配 token / 反代认证）

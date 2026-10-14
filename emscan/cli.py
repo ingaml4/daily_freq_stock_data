@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 
 from .box import scan_box
+from .doji import doji_params, scan_doji
 from .config import Config
 from .demo import synthesize
 from .mairui import (
@@ -77,6 +78,7 @@ PRIMARY_SIGNAL_ALIASES = {
     "kdj_golden": "s_kdj_golden",
     "boll_break_lower": "s_boll_break_lower",
     "box_range": "s_box_range",
+    "low_doji": "s_low_doji",
 }
 
 # `hits` 命令的展示列（读的是每日信号缓存 daily_signals）
@@ -103,6 +105,10 @@ HITS_COLUMNS = (
     "box_low",
     "box_avg_turnover",
     "box_avg_amplitude",
+    "doji_pos",
+    "doji_body",
+    "doji_vol_ratio",
+    "doji_drawdown",
 )
 
 HITS_LABELS = {
@@ -128,6 +134,10 @@ HITS_LABELS = {
     "box_low": "箱底",
     "box_avg_turnover": "日均换手%",
     "box_avg_amplitude": "日均振幅%",
+    "doji_pos": "60日位置",
+    "doji_body": "实体%",
+    "doji_vol_ratio": "量/前5日均",
+    "doji_drawdown": "距高点%",
 }
 
 HITS_FORMATS = {
@@ -149,6 +159,10 @@ HITS_FORMATS = {
     "box_low": "{:.2f}",
     "box_avg_turnover": "{:.2f}",
     "box_avg_amplitude": "{:.2f}",
+    "doji_pos": "{:.2f}",
+    "doji_body": "{:.2%}",
+    "doji_vol_ratio": "{:.2f}",
+    "doji_drawdown": "{:+.1%}",
 }
 
 
@@ -664,6 +678,78 @@ def _box_features_for_cache(store: Store, cfg: Config, trade_date: str):
     return features
 
 
+def cmd_doji(cfg: Config, args: argparse.Namespace) -> int:
+    """筛"低位缩量十字星"（超跌企稳观察信号），并写进每日信号缓存。"""
+    store = open_store(cfg)
+    trade_date = getattr(args, "trade_date", None) or store.latest_date()
+    if not trade_date:
+        log.error("本地没有任何行情数据，先执行 backfill 或 run")
+        store.close()
+        return 1
+    params = doji_params(cfg)
+    log.info("低位缩量十字星筛选：交易日 %s · 口径 %s", trade_date, params)
+    features = scan_doji(store, cfg, trade_date=trade_date, with_symbols=True)
+    if features is not None and not features.empty:
+        features["date"] = trade_date
+        written = store.upsert_daily_signals(features.to_dict("records"))
+        log.info("每日信号缓存已更新：%s 行（十字星特征 + 命中标记）", written)
+        hits = features[features["s_low_doji"] == 1].copy()
+    else:
+        hits = features
+    if hits is None or hits.empty:
+        print(f"低位缩量十字星 | 交易日 {trade_date}\n（没有符合条件的票）")
+        store.record_run("doji", trade_date=trade_date, hits=0)
+        store.close()
+        return 0
+    if "name" not in hits.columns:
+        symbols = store.symbols_df()
+        if symbols is not None and not symbols.empty:
+            meta = symbols.drop_duplicates(subset=["secid"]).set_index("secid")
+            for column in ("code", "name", "board"):
+                hits[column] = meta[column].reindex(hits["secid"]).to_numpy()
+    hits["amount_yi"] = hits.get("amount", pd.Series(index=hits.index, dtype=float)) / 1e8
+    hits = hits.sort_values(["doji_pos", "doji_vol_ratio"], ascending=[True, True]).head(
+        int(cfg.get("doji.top_n", 100) or 100)
+    )
+    hits["trade_date"] = trade_date
+    rule_text = "、".join("%s %s" % (k, v) for k, v in params.items())
+    summary = (
+        f"低位缩量十字星 | 交易日 {trade_date}\n"
+        f"命中 {len(hits)} 只 · 按 60 日位置升序（越低越靠前）\n"
+        f"口径：{rule_text}"
+    )
+    print_frame(
+        type("_R", (), {"hits": hits})(),
+        columns=DOJI_REPORT_COLUMNS,
+        labels=HITS_LABELS,
+        float_formats=HITS_FORMATS,
+        summary=summary,
+    )
+    files = write_files(
+        _BoxResult(trade_date, hits), cfg, prefix="doji", sheet_name="低位缩量十字星"
+    )
+    for path in files:
+        log.info("报告已写出：%s", path)
+    store.record_run("doji", trade_date=trade_date, hits=len(hits))
+    store.close()
+    return 0
+
+
+DOJI_REPORT_COLUMNS = (
+    "code",
+    "name",
+    "board",
+    "close",
+    "pct_chg",
+    "amount_yi",
+    "doji_pos",
+    "doji_body",
+    "doji_vol_ratio",
+    "doji_drawdown",
+    "turnover",
+)
+
+
 def cmd_signals(cfg: Config, args: argparse.Namespace) -> int:
     """筛"MACD/KDJ 金叉、布林下轨"等指标信号，出终端表格 + CSV/XLSX。"""
     store = open_store(cfg)
@@ -887,6 +973,12 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
             rc = max(rc, cmd_box(cfg, args))
         except Exception as exc:  # 箱体筛选失败不影响放量/信号报告
             log.error("箱体筛选失败：%s", exc)
+            log.debug("详细堆栈", exc_info=True)
+    if bool(cfg.get("doji.enabled", True)):
+        try:
+            rc = max(rc, cmd_doji(cfg, args))
+        except Exception as exc:
+            log.error("十字星筛选失败：%s", exc)
             log.debug("详细堆栈", exc_info=True)
     if _signals_enabled(cfg, args):
         try:
@@ -1174,6 +1266,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_box = sub.add_parser("box", help="筛箱体震荡 + 换手健康的票（做 T 备选池）")
     p_box.add_argument("--trade-date", dest="trade_date", help="交易日 YYYY-MM-DD（默认最新）")
 
+    p_doji = sub.add_parser("doji", help="筛低位缩量十字星（超跌企稳观察）")
+    p_doji.add_argument("--trade-date", dest="trade_date", help="交易日 YYYY-MM-DD（默认最新）")
+
     p_scan = sub.add_parser("scan", help="用本地数据扫描放量（可回看历史某天）")
     p_scan.add_argument("--trade-date", dest="trade_date", help="要扫描的交易日 YYYY-MM-DD")
 
@@ -1253,6 +1348,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "indicators": cmd_indicators,
         "scan": cmd_scan,
         "box": cmd_box,
+        "doji": cmd_doji,
         "signals": cmd_signals,
         "hits": cmd_hits,
         "run": cmd_run,
