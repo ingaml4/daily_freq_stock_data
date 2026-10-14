@@ -29,7 +29,8 @@ from .tzutil import now_hm
 log = logging.getLogger("emscan")
 
 DEEPSEEK_BASE = "https://api.deepseek.com"
-DEEPSEEK_MODEL = "deepseek-chat"
+# 当前官方模型名：deepseek-flash（快/便宜，复盘够用）、deepseek-v4-pro（更强，更慢更贵）
+DEEPSEEK_MODEL = "deepseek-flash"
 
 VIEW_LABELS = {
     "s_vol_spike": "放量大涨",
@@ -206,6 +207,16 @@ def call_deepseek(cfg, prompt: str, api_key: str) -> str:
             "temperature": float(cfg.get("summary.temperature", 0.3) or 0.3),
             "max_tokens": int(cfg.get("summary.max_tokens", 1600) or 1600),
             "stream": False,
+            **(
+                {"thinking": {"type": "enabled"}}
+                if str(cfg.get("summary.thinking", "") or "").lower() in ("1", "true", "yes")
+                else {}
+            ),
+            **(
+                {"reasoning_effort": str(cfg.get("summary.reasoning_effort"))}
+                if cfg.get("summary.reasoning_effort")
+                else {}
+            ),
         },
         timeout=float(cfg.get("summary.timeout", 90) or 90),
     )

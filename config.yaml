@@ -98,3 +98,13 @@ mairui:
 #   remember_sort: true # 用浏览器本地存储记住上次排序列（排序本身是纯前端的，不进 URL）
 #   update_times: "15:32,17:15"   # 页面上"系统几点更新"的提示（install_services.sh 会按 --daily-times 写进 env）
 #   page_size: 20       # 表格默认每页行数（网页上还能随时点 10/20/50/100）
+
+# 收盘复盘总结（网页"当日总结"按钮）。密钥走环境变量 DEEPSEEK_API_KEY（或下面 api_key）
+# summary:
+#   enabled: true
+#   only_after: "17:00"        # 当天几点后才生成（避开 15:32 那次数据不全）
+#   model: deepseek-flash      # 官方模型：deepseek-flash / deepseek-v4-pro
+#   thinking: false            # 需要更强推理时打开
+#   reasoning_effort: ""       # low / medium / high（配合 thinking）
+#   max_tokens: 1600
+#   api_key: ""                # 建议用环境变量，不要写进 git
