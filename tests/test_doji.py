@@ -19,7 +19,12 @@ def _market(last_body=0.0005, last_vol=40000.0, last_low_f=0.98, trend=-0.15, la
     c = 20.0 + trend * (len(dates) - 1)
     last = bar("1.600001", dates[-1], last_vol, close=c)
     last.update(
-        open=c * (1 + last_body), high=c * 1.02, low=c * last_low_f, turnover=1.0, amount=4e7
+        open=c * (1 + last_body),
+        high=c * 1.02,
+        low=c * last_low_f,
+        turnover=1.0,
+        amount=4e7,
+        pct_chg=last_pct,
     )
     rows.append(last)
     return pd.DataFrame(rows), dates
