@@ -27,7 +27,7 @@ from .mairui import BAR_FIELDS, INDICATOR_MAP
 log = logging.getLogger(__name__)
 
 # 表结构版本号：改 SCHEMA / 迁移逻辑就 +1（init_schema 靠它决定要不要重建）
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 DAILY_SIGNALS_VIEW = """CREATE VIEW IF NOT EXISTS daily_signals_named AS
 SELECT
@@ -160,6 +160,7 @@ CREATE TABLE IF NOT EXISTS daily_signals (
     box_days           INTEGER,
     -- 低位缩量十字星
     doji_body          REAL,
+    doji_stop_pos      REAL,
     doji_upper         REAL,
     doji_lower         REAL,
     doji_pos           REAL,
@@ -295,6 +296,7 @@ DAILY_SIGNAL_COLUMNS: tuple = (
     "box_extreme_days",
     "box_days",
     "doji_body",
+    "doji_stop_pos",
     "doji_upper",
     "doji_lower",
     "doji_pos",

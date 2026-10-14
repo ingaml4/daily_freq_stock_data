@@ -127,11 +127,17 @@ DEFAULTS: Dict[str, Any] = {
     # 低位缩量十字星（判定口径见 emscan/doji.py 顶部注释）
     "doji": {
         "enabled": True,
-        "body_ratio": 0.003,  # 实体/前收 上限（0.3%）
-        "shadow_body_multiple": 2.0,  # 上下影线至少是实体的几倍
-        "require_both_shadows": True,
-        "position_window": 60,  # 低位判定窗口（交易日）
-        "max_position": 0.30,  # 收盘在窗口区间的位置上限（0=最低）
+        # 形态默认不强制：require_shape=false 时不看十字星形状（只看缩量止跌）
+        "require_shape": False,
+        "body_ratio": 0.015,  # 小实体：|收-开|/前收 <= 1.5%
+        "lower_shadow_ratio": 0.01,  # 或有明显下影线（>=1%）
+        "drawdown_window": 120,  # 回撤参考窗口（交易日）
+        "use_range_position": False,  # 是否再叠加"区间位置"条件
+        "position_window": 60,
+        "max_position": 0.30,
+        "min_pct_chg": -1.5,  # 止跌：当日涨跌幅 >= -1.5%
+        "max_pct_chg": 3.0,  # 但大涨不算（>3% 视作启动）
+        "close_off_low_ratio": 0.35,  # 收盘在当日振幅的位置 >= 0.35
         "max_drawdown_from_high": -0.20,  # 或：距窗口高点回撤 >= 20%
         "shrink_window": 5,  # 缩量对比的前 N 日均量
         "shrink_ratio": 0.6,  # 当日量 <= 均量 * 0.6

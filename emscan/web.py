@@ -76,8 +76,8 @@ VIEWS: Dict[str, Dict[str, str]] = {
     },
     "low_doji": {
         "flag": "s_low_doji",
-        "nav": "低位十字星",
-        "title": "低位缩量十字星（超跌企稳，60 日位置越低越靠前）",
+        "nav": "缩量止跌",
+        "title": "缩量止跌（大幅回撤后突然缩量、当日不再下跌）",
         "sort": "doji_pos",
         "order": "asc",
     },
@@ -120,6 +120,7 @@ COLUMNS: Tuple[Tuple[str, str, Optional[str], bool], ...] = (
     ("box_avg_amplitude", "日均振幅%", "{:.2f}", True),
     ("doji_pos", "60日位置", "{:.2f}", True),
     ("doji_body", "实体%", "{:.2%}", True),
+    ("doji_stop_pos", "收盘位置", "{:.2f}", True),
     ("doji_vol_ratio", "量/前5日均", "{:.2f}", True),
     ("doji_drawdown", "距60日高点%", "{:+.1%}", True),
     ("signals_cn", "命中信号", None, False),
@@ -294,17 +295,19 @@ def build_view_help(cfg) -> Dict[str, str]:
             days=g("box.min_valid_days", 35),
         ),
         "low_doji": (
-            "低位缩量十字星：① 实体 |收-开|/前收 ≤ {body}，且<b>上下影线各 ≥ {mult} 倍实体</b>；"
-            "② <b>低位</b>：收盘在最近 {w} 个交易日区间的位置 ≤ {pos}（或距 {w} 日高点回撤 ≥ {dd}）；"
-            "③ <b>缩量</b>：当日量 ≤ 之前 {sw} 个交易日均量 × {sr}；"
-            "④ 成交额 ≥ {amt} 万、换手 ≤ {to}%、≥{mb} 根K线、非ST。<br>"
-            "按 60 日位置升序排（越低越靠前）。"
+            "<b>缩量止跌</b>（三条同时满足）：<br>"
+            "① <b>大幅回撤</b>：距最近 {w} 个交易日高点回撤 ≥ {dd}；<br>"
+            "② <b>突然缩量</b>：当日量 ≤ 之前 {sw} 个交易日均量 × {sr}；<br>"
+            "③ <b>当日止跌</b>：涨跌幅在 {lo}% ~ {hi}% 之间（微红/微跌都算，大涨不算），"
+            "且收盘不在当日最低（收盘位置 ≥ {pos}）。<br>"
+            "另外：成交额 ≥ {amt} 万、换手 ≤ {to}%、≥{mb} 根K线、非ST；"
+            "形态（小实体/长下影）默认不作条件。"
         ).format(
-            body=g("doji.body_ratio", 0.003),
-            mult=g("doji.shadow_body_multiple", 2.0),
-            w=g("doji.position_window", 60),
-            pos=g("doji.max_position", 0.30),
+            w=g("doji.drawdown_window", 120),
+            pos=g("doji.close_off_low_ratio", 0.35),
             dd=g("doji.max_drawdown_from_high", -0.20),
+            lo=g("doji.min_pct_chg", -1.5),
+            hi=g("doji.max_pct_chg", 3.0),
             sw=g("doji.shrink_window", 5),
             sr=g("doji.shrink_ratio", 0.6),
             amt=round(float(g("doji.min_amount", 0) or 0) / 10000),

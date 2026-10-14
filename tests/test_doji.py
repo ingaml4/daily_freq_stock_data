@@ -8,7 +8,7 @@ from emscan.doji import compute_doji_features
 from emscan.cli import main, open_store
 
 
-def _market(last_body=0.0005, last_vol=40000.0, last_low_f=0.98, trend=-0.15):
+def _market(last_body=0.0005, last_vol=40000.0, last_low_f=0.98, trend=-0.15, last_pct=0.0):
     dates = trading_dates(70, end="2026-10-13")
     rows = []
     for i, d in enumerate(dates[:-1]):
@@ -35,7 +35,8 @@ def test_low_shrinking_doji_is_detected():
 @pytest.mark.parametrize(
     "kwargs,reason",
     [
-        ({"last_body": 0.04}, "实体太大不是十字星"),
+        ({"last_pct": -6.0}, "当日大跌不算止跌"),
+        ({"last_pct": 6.0}, "缩量微红算止跌、但大涨（启动）不算"),
         ({"last_vol": 200000.0}, "放量而不是缩量"),
     ],
 )

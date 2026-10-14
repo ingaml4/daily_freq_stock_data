@@ -2,6 +2,17 @@
 
 用 A 股技术分析里比较常见的口径，四个条件同时满足才算命中：
 
+（当前默认口径）**大幅回撤 + 当天突然缩量 + 当日止跌**，三条同时满足即命中：
+
+1. **大幅回撤**：距最近 ``drawdown_window``（默认 120）个交易日**高点**回撤 >= ``max_drawdown_from_high``（默认 20%）；
+   （原来那套"60 日区间位置"改成可选，``use_range_position: true`` 才启用）
+2. **突然缩量**：当日量 <= 之前 ``shrink_window``（默认 5）个有效交易日均量 × ``shrink_ratio``（默认 0.6）；
+3. **当日止跌**：涨跌幅在 ``[min_pct_chg, max_pct_chg]`` 之间（默认 -1.5% ~ +3%，**微红、微跌都算止跌**，
+   大涨不算——那是启动不是止跌），且收盘不在当日最低（``(收-低)/(高-低) >= close_off_low_ratio``，默认 0.35）。
+
+形态（小实体/长下影）默认**不作为必选条件**（``require_shape: false``），需要时再打开。
+
+（旧的严格口径，供参考）
 1. **十字星形态**：实体极小——``|收-开|/前收 <= body_ratio``（默认 0.3%），
    并且有**上下影线**（``high > max(开,收)``、``low < min(开,收)``），
    影线长度至少是实体的 ``shadow_body_multiple`` 倍（默认 2 倍），
@@ -45,6 +56,7 @@ DOJI_BAR_COLUMNS = (
 
 DOJI_COLUMNS: tuple = (
     "doji_body",
+    "doji_stop_pos",
     "doji_upper",
     "doji_lower",
     "doji_pos",
@@ -69,10 +81,14 @@ def compute_doji_features(
 ) -> pd.DataFrame:
     """逐只票算"低位缩量十字星"特征 + ``s_low_doji`` 标记。"""
     conf = cfg.get if cfg is not None else (lambda key, default=None: default)
-    body_ratio = float(conf("doji.body_ratio", 0.003))
-    shadow_mult = float(conf("doji.shadow_body_multiple", 2.0))
-    both_shadows = bool(conf("doji.require_both_shadows", True))
-    window = int(conf("doji.position_window", 60) or 60)
+    body_ratio = float(conf("doji.body_ratio", 0.015))
+    lower_shadow_ratio = float(conf("doji.lower_shadow_ratio", 0.01))
+    require_shape = bool(conf("doji.require_shape", False))
+    window = int(conf("doji.drawdown_window", 120) or 120)
+    use_position = bool(conf("doji.use_range_position", False))
+    min_pct = float(conf("doji.min_pct_chg", -1.5))
+    max_pct = float(conf("doji.max_pct_chg", 3.0))
+    close_off_low_ratio = float(conf("doji.close_off_low_ratio", 0.35))
     max_position = float(conf("doji.max_position", 0.30))
     max_drawdown = float(conf("doji.max_drawdown_from_high", -0.20))
     shrink_window = int(conf("doji.shrink_window", 5) or 5)
@@ -123,6 +139,7 @@ def compute_doji_features(
         row["doji_body"] = body / base
         row["doji_upper"] = upper / base
         row["doji_lower"] = lower / base
+        row["doji_stop_pos"] = ((close - low) / (high - low)) if high > low else None
 
         # 低位：收盘在 60 日区间下沿，或距 60 日高点回撤够深
         rng_high, rng_low = float(np.nanmax(tail["high"])), float(np.nanmin(tail["low"]))
@@ -138,23 +155,27 @@ def compute_doji_features(
         vol_ratio = (volume / prior_mean) if (volume is not None and prior_mean) else None
         row["doji_vol_ratio"] = vol_ratio
 
-        small_body = row["doji_body"] <= body_ratio
-        shadow_ok = (
-            upper >= shadow_mult * body and lower >= shadow_mult * body
-            if both_shadows
-            else max(upper, lower) >= shadow_mult * body
-        )
-        low_ok = (position is not None and position <= max_position) or (
-            drawdown is not None and drawdown <= max_drawdown
-        )
+        # 形态（默认不强制）：小实体 或 明显下影线
+        shape_ok = (row["doji_body"] <= body_ratio) or (lower / base >= lower_shadow_ratio)
+        # 低位：默认只看"距高点大幅回撤"；可选再叠加"区间位置"
+        deep = drawdown is not None and drawdown <= max_drawdown
+        low_ok = deep and (not use_position or (position is not None and position <= max_position))
         shrink_ok = vol_ratio is not None and vol_ratio <= shrink_ratio
+        pct = _f(last["pct_chg"])
+        # 止跌：微红/微跌都算，但大涨不算；且收盘别贴着当日最低
+        stop_ok = (
+            pct is not None
+            and min_pct <= pct <= max_pct
+            and row["doji_stop_pos"] is not None
+            and row["doji_stop_pos"] >= close_off_low_ratio
+        )
         turnover = _f(last["turnover"])
         amount = _f(last["amount"])
         row["s_low_doji"] = int(
-            small_body
-            and shadow_ok
+            (shape_ok or not require_shape)
             and low_ok
             and shrink_ok
+            and stop_ok
             and (turnover is None or turnover <= max_turnover)
             and (amount is None or amount >= min_amount)
             and not (exclude_st and str(secid) in st)
@@ -166,11 +187,10 @@ def compute_doji_features(
 def doji_params(cfg) -> Dict[str, float]:
     """报告里要展示的口径（顺手把窗口参数也带上）。"""
     keys = {
-        "实体上限": ("doji.body_ratio", 0.003),
-        "影线/实体倍数": ("doji.shadow_body_multiple", 2.0),
-        "低位窗口": ("doji.position_window", 60),
-        "低位位置上限": ("doji.max_position", 0.30),
+        "回撤窗口": ("doji.drawdown_window", 120),
         "高点回撤阈值": ("doji.max_drawdown_from_high", -0.20),
+        "当日涨跌幅区间": ("doji.min_pct_chg", -1.5),
+        "收盘位置下限": ("doji.close_off_low_ratio", 0.35),
         "缩量窗口": ("doji.shrink_window", 5),
         "缩量倍数": ("doji.shrink_ratio", 0.6),
         "换手率上限%": ("doji.max_turnover", 5.0),
