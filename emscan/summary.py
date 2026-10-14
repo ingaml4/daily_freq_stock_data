@@ -196,40 +196,46 @@ def rule_summary(digest: Dict[str, Any]) -> str:
 
 
 def call_deepseek(cfg, prompt: str, api_key: str) -> str:
+    """调用 DeepSeek（OpenAI 兼容的 /chat/completions）。
+
+    请求参数按官方文档对齐：显式传 ``thinking``（推理 token 会占用 max_tokens，
+    写复盘默认关闭；``summary.thinking: true`` 时额外传 ``reasoning_effort``）。
+    """
     base = str(cfg.get("summary.base_url", DEEPSEEK_BASE) or DEEPSEEK_BASE).rstrip("/")
     model = str(cfg.get("summary.model", DEEPSEEK_MODEL) or DEEPSEEK_MODEL)
+    thinking = _thinking(cfg)
+    body: Dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": float(cfg.get("summary.temperature", 0.3) or 0.3),
+        "max_tokens": int(cfg.get("summary.max_tokens", 4000) or 4000),
+        "stream": False,
+        "thinking": {"type": "enabled" if thinking else "disabled"},
+    }
+    if thinking:
+        body["reasoning_effort"] = str(cfg.get("summary.reasoning_effort", "high") or "high")
     resp = requests.post(
         f"{base}/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": float(cfg.get("summary.temperature", 0.3) or 0.3),
-            "max_tokens": int(cfg.get("summary.max_tokens", 1600) or 1600),
-            "stream": False,
-            **(
-                {"thinking": {"type": "enabled"}}
-                if str(cfg.get("summary.thinking", "") or "").lower() in ("1", "true", "yes")
-                else {}
-            ),
-            **(
-                {"reasoning_effort": str(cfg.get("summary.reasoning_effort"))}
-                if cfg.get("summary.reasoning_effort")
-                else {}
-            ),
-        },
+        json=body,
         timeout=float(cfg.get("summary.timeout", 90) or 90),
     )
     resp.raise_for_status()
     payload = resp.json()
     text = extract_text(payload)
     if not text:
-        # 结构不一样就把原始响应前 400 字打出来（不含密钥，方便我按实际结构适配）
+        choice = (payload.get("choices") or [{}])[0]
         log.warning(
-            "DeepSeek 返回内容为空，原始响应前 400 字：%s",
+            "DeepSeek 返回正文为空：finish_reason=%s usage=%s；原始响应前 400 字：%s",
+            choice.get("finish_reason"),
+            payload.get("usage"),
             json.dumps(payload, ensure_ascii=False)[:400],
         )
     return text
+
+
+def _thinking(cfg) -> bool:
+    return str(cfg.get("summary.thinking", "") or "").lower() in ("1", "true", "yes", "on")
 
 
 def extract_text(payload: Any) -> str:
