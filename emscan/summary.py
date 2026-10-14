@@ -31,6 +31,12 @@ log = logging.getLogger("emscan")
 DEEPSEEK_BASE = "https://api.deepseek.com"
 # 当前官方模型名：deepseek-flash（快/便宜，复盘够用）、deepseek-v4-pro（更强，更慢更贵）
 DEEPSEEK_MODEL = "deepseek-flash"
+# 官方文档：max_tokens 取值 1 ~ 393216；不填时非思考 8K、思考 64K、effort=max 时 128K
+MAX_TOKENS_CEILING = 393_216
+DEFAULT_MAX_TOKENS = 32_000  # 思考 token 也算在里面，默认给足（想省一点可调小，填 0 = 用官方默认）
+# 思考档位（官方：none / low / high / max，默认 high）；兼容老写法
+EFFORTS = ("none", "low", "high", "max")
+EFFORT_ALIASES = {"minimal": "low", "medium": "high", "xhigh": "high"}
 
 VIEW_LABELS = {
     "s_vol_spike": "放量大涨",
@@ -195,26 +201,35 @@ def rule_summary(digest: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _build_body(cfg, model: str, prompt: str, thinking: bool) -> Dict[str, Any]:
+def _build_body(
+    cfg, model: str, prompt: str, thinking: bool, max_tokens: Optional[int] = None
+) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
+        # 思考模式下 temperature 不生效（官方文档），只有关掉思考时才起作用
         "temperature": float(cfg.get("summary.temperature", 0.3) or 0.3),
-        "max_tokens": int(cfg.get("summary.max_tokens", 8000) or 8000),
         "stream": False,
         "thinking": {"type": "enabled" if thinking else "disabled"},
+        # 关思考要配 effort=none；开思考才给档位（不给的话官方默认 high）
+        "reasoning_effort": _effort(cfg) if thinking else "none",
     }
-    if thinking:
-        body["reasoning_effort"] = str(cfg.get("summary.reasoning_effort", "high") or "high")
+    limit = _max_tokens(cfg) if max_tokens is None else max_tokens
+    if limit:  # 0/None = 不传，交给官方默认值（思考 64K / 非思考 8K）
+        body["max_tokens"] = limit
     return body
 
 
 def call_deepseek(cfg, prompt: str, api_key: str) -> str:
     """调用 DeepSeek（OpenAI 兼容的 /chat/completions）。
 
-    复盘是"综合判断"类任务（跨六张名单找主线、排序反转信号质量），所以**默认开思考**
-    （``summary.thinking: true``）并给足 ``max_tokens``（思考 token 也算在里面）。
-    保险起见：思考模式若没返回正文（例如长度被吃满/结构异常），自动关掉思考重试一次。
+    复盘是"综合判断"类任务（跨六张名单找主线、判断反转信号质量、分辨消息面共振），所以
+    **默认开思考**（``summary.thinking: true`` + ``reasoning_effort: high``）。
+
+    坑：思考 token 也算进 ``max_tokens``，预算被思考吃满时正文要么是空的、要么是半截。
+    于是这里有两道保险：
+    * 参数不被接口接受（400）→ 去掉 max_tokens / reasoning_effort 再试一次；
+    * 思考模式返回空正文或被截断 → 用非思考模式重试一次（保留能用的那一份）。
     """
     base = str(cfg.get("summary.base_url", DEEPSEEK_BASE) or DEEPSEEK_BASE).rstrip("/")
     model = str(cfg.get("summary.model", DEEPSEEK_MODEL) or DEEPSEEK_MODEL)
@@ -223,26 +238,67 @@ def call_deepseek(cfg, prompt: str, api_key: str) -> str:
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     thinking = _thinking(cfg)
-    payload = _post_json(url, headers, _build_body(cfg, model, prompt, thinking), timeout)
+    payload = _post_json_safe(url, headers, cfg, model, prompt, thinking, timeout)
     text = extract_text(payload)
-    if not text and thinking:
-        choice = (payload.get("choices") or [{}])[0]
+    if thinking and (not text or _truncated(payload)):
         log.warning(
-            "思考模式没返回正文（finish_reason=%s usage=%s），自动用 disabled 重试一次",
-            choice.get("finish_reason"),
+            "思考模式返回不完整（finish_reason=%s，思考 %d 字，正文 %d 字，usage=%s），"
+            "自动改用非思考模式重试一次（想根治就把 summary.max_tokens 调大、或 effort 调到 max）",
+            _finish_reason(payload) or "?",
+            len(extract_reasoning(payload)),
+            len(text),
             payload.get("usage"),
         )
-        payload = _post_json(url, headers, _build_body(cfg, model, prompt, False), timeout)
-        text = extract_text(payload)
+        retry = _post_json_safe(url, headers, cfg, model, prompt, False, timeout)
+        retry_text = extract_text(retry)
+        if retry_text and (not text or not _truncated(retry)):
+            payload, text = retry, retry_text
     if not text:
-        choice = (payload.get("choices") or [{}])[0]
         log.warning(
             "DeepSeek 返回正文为空：finish_reason=%s usage=%s；原始响应前 400 字：%s",
-            choice.get("finish_reason"),
+            _finish_reason(payload) or "?",
             payload.get("usage"),
             json.dumps(payload, ensure_ascii=False)[:400],
         )
+    elif _truncated(payload):
+        log.warning(
+            "DeepSeek 正文被 max_tokens 截断（finish_reason=length，%d 字），内容可能不完整："
+            "把 summary.max_tokens 调大（上限 393216）或把 summary.reasoning_effort 调低",
+            len(text),
+        )
+    else:
+        log.info(
+            "DeepSeek 复盘完成：正文 %d 字，思考 %d 字，finish_reason=%s，usage=%s",
+            len(text),
+            len(extract_reasoning(payload)),
+            _finish_reason(payload) or "-",
+            payload.get("usage"),
+        )
     return text
+
+
+def _post_json_safe(
+    url: str,
+    headers: Dict[str, str],
+    cfg,
+    model: str,
+    prompt: str,
+    thinking: bool,
+    timeout: float,
+) -> Dict[str, Any]:
+    """发请求；接口若嫌 max_tokens / reasoning_effort 不合法（400），去掉这两个参数再试一次。"""
+    body = _build_body(cfg, model, prompt, thinking)
+    try:
+        return _post_json(url, headers, body, timeout)
+    except requests.HTTPError as exc:
+        response = getattr(exc, "response", None)
+        detail = (response.text if response is not None else "")[:300]
+        rejected = "max_tokens" in detail or "reasoning_effort" in detail
+        if response is None or response.status_code != 400 or not rejected:
+            raise
+        log.warning("接口不认 max_tokens/reasoning_effort（%s），去掉这两个参数再试一次", detail)
+        trimmed = {k: v for k, v in body.items() if k not in ("max_tokens", "reasoning_effort")}
+        return _post_json(url, headers, trimmed, timeout)
 
 
 def _post_json(
@@ -254,26 +310,86 @@ def _post_json(
     return payload if isinstance(payload, dict) else {}
 
 
+def _choice(payload: Any) -> Dict[str, Any]:
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    first = (choices or [None])[0]
+    return first if isinstance(first, dict) else {}
+
+
+def _finish_reason(payload: Any) -> str:
+    return str(_choice(payload).get("finish_reason") or "")
+
+
+def _truncated(payload: Any) -> bool:
+    """finish_reason=length：生成被 max_tokens 或上下文长度截断，正文可能只是半截。"""
+    return _finish_reason(payload) == "length"
+
+
+def extract_reasoning(payload: Any) -> str:
+    """思考模式返回的思维链（``reasoning_content``），只用于日志诊断，绝不当复盘正文。"""
+    message = _choice(payload).get("message")
+    value = message.get("reasoning_content") if isinstance(message, dict) else None
+    return value.strip() if isinstance(value, str) else ""
+
+
 def _thinking(cfg) -> bool:
-    """默认开思考（复盘是综合判断类任务）；``summary.thinking: false`` 可关掉。"""
+    """默认开思考（复盘是综合判断类任务）；``summary.thinking: false`` 或 effort=none 关掉。"""
+    if _effort(cfg) == "none":
+        return False
     value = cfg.get("summary.thinking", True)
     if value is None:
         return True
     return str(value).lower() in ("1", "true", "yes", "on")
 
 
+def _effort(cfg) -> str:
+    """思考档位：none / low / high / max（官方默认 high）；写法不认识就回落到 high。"""
+    raw = str(cfg.get("summary.reasoning_effort", "high") or "high").strip().lower()
+    value = EFFORT_ALIASES.get(raw, raw)
+    return value if value in EFFORTS else "high"
+
+
+def _max_tokens(cfg) -> Optional[int]:
+    """生成上限：1 ~ 393216，超了按上限夹住；0/负数/空 = 不传（用官方默认）。"""
+    raw = cfg.get("summary.max_tokens", DEFAULT_MAX_TOKENS)
+    if raw is None or str(raw).strip() == "":
+        return DEFAULT_MAX_TOKENS
+    try:
+        value = int(float(str(raw).strip()))
+    except (TypeError, ValueError):
+        log.warning("summary.max_tokens=%r 不是数字，改用默认 %d", raw, DEFAULT_MAX_TOKENS)
+        return DEFAULT_MAX_TOKENS
+    if value <= 0:
+        return None
+    if value > MAX_TOKENS_CEILING:
+        log.warning("summary.max_tokens=%d 超过官方上限，按 %d 处理", value, MAX_TOKENS_CEILING)
+        return MAX_TOKENS_CEILING
+    return value
+
+
+def mode_text(cfg) -> str:
+    """给 check / 日志用的一行描述：思考开关 + 档位 + 生成上限。"""
+    limit = _max_tokens(cfg)
+    budget = f"max_tokens {limit}" if limit else "max_tokens 用官方默认"
+    if not _thinking(cfg):
+        return f"非思考模式（{budget}）"
+    return f"思考模式 reasoning_effort={_effort(cfg)}（{budget}）"
+
+
 def extract_text(payload: Any) -> str:
     """从常见的几种返回结构里取正文（不同版本/供应商字段名不一样）。
 
     * OpenAI 风格：``choices[0].message.content``（可能是字符串，也可能是分段列表）
-    * 有的版本把思考过程放 ``reasoning_content``，正文在 ``content``；有的把正文放 ``text``/``output_text``
+    * 有的版本把正文放 ``text``/``output_text``
+    注意：思考模式的思维链在 ``message.reasoning_content``，那是过程不是结论，
+    这里**不算正文**（否则会把半截思维链当成复盘发出去）；需要时用 :func:`extract_reasoning`。
     """
     if not isinstance(payload, dict):
         return ""
-    choices = payload.get("choices") or []
-    if choices:
-        message = choices[0].get("message") or {}
-        for key in ("content", "text", "reasoning_content"):
+    choice = _choice(payload)
+    if choice:
+        message = choice.get("message") or {}
+        for key in ("content", "text"):
             value = message.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -285,7 +401,7 @@ def extract_text(payload: Any) -> str:
                 if joined:
                     return joined
         for key in ("text", "content", "output_text"):
-            value = choices[0].get(key)
+            value = choice.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
     for key in ("output_text", "content", "text"):
@@ -312,7 +428,9 @@ def generate_summary(
             ai_text = call_deepseek(cfg, prompt, api_key)
             model = str(cfg.get("summary.model", DEEPSEEK_MODEL) or DEEPSEEK_MODEL)
             if ai_text:
-                content, engine = ai_text, model
+                # 引擎名带上思考档位：网页"当日总结"里一眼能看出这份复盘是不是开了思考
+                content = ai_text
+                engine = f"{model}(thinking={_effort(cfg)})" if _thinking(cfg) else model
             else:
                 content = rule_summary(digest)
                 engine = f"rule(无正文:{model})"

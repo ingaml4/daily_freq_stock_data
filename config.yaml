@@ -104,7 +104,7 @@ mairui:
 #   enabled: true
 #   only_after: "17:00"        # 当天几点后才生成（避开 15:32 那次数据不全）
 #   model: deepseek-flash      # 官方模型：deepseek-flash / deepseek-v4-pro
-#   thinking: false            # 需要更强推理时打开
-#   reasoning_effort: ""       # low / medium / high（配合 thinking）
-#   max_tokens: 1600
+#   thinking: true             # 默认开思考（复盘要跨按钮找主线、辨消息面共振）
+#   reasoning_effort: high     # none / low / high / max（none=关思考；max 预算更大更慢）
+#   max_tokens: 32000          # 生成上限（官方允许 1~393216）；思考 token 也算在里面，填 0=用官方默认
 #   api_key: ""                # 建议用环境变量，不要写进 git

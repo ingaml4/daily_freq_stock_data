@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 
 from .box import scan_box
-from .summary import generate_summary, is_due as summary_is_due, summary_after
+from .summary import generate_summary, is_due as summary_is_due, mode_text as summary_mode_text, summary_after
 from .doji import compute_reversal_features, doji_params
 from .config import Config
 from .demo import synthesize
@@ -1182,7 +1182,8 @@ def cmd_check(cfg: Config, args: argparse.Namespace) -> int:
     env_name = str(cfg.get("summary.api_key_env", "DEEPSEEK_API_KEY"))
     where = "环境变量/环境文件" if os.environ.get(env_name) else ("config.yaml" if key else "")
     print(
-        f"  当日总结：模型 {cfg.get('summary.model')} · {summary_after(cfg)} 之后生成 · "
+        f"  当日总结：模型 {cfg.get('summary.model')} · {summary_mode_text(cfg)} · "
+        f"{summary_after(cfg)} 之后生成 · "
         f"密钥 {'已配置（' + where + '，长度 %d）' % len(key) if key else '未配置（会出规则版总结）'}"
     )
     store.close()

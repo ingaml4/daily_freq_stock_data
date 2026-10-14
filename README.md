@@ -42,6 +42,7 @@ bash scripts/daily_scan.sh                  # 以后每天由 cron 跑这一条
 | `python3 -m emscan box [--trade-date ...]` | 筛**箱体震荡 + 换手健康**的票（做 T 备选池） |
 | `python3 -m emscan doji [--trade-date ...]` | 筛**低位缩量十字星**（超跌企稳观察信号） |
 | `python3 -m emscan hits [--date ...] [--secid ...] [--only ...]` | **查每日信号缓存**（四个主信号，不联网、秒回） |
+| `python3 -m emscan summary [--force] [--rule]` | 生成当日复盘总结（有 `DEEPSEEK_API_KEY` 走 AI，没有就出规则版） |
 | `python3 -m emscan web [--host ...] [--port ...] [--password ...]` | **起网页端**：四个查询按钮 + 可排序表格（口令登录，代码跳雪球） |
 | `python3 -m emscan demo` | 无网络自检：合成行情跑通"落库→扫描→报告" |
 | `python3 -m emscan init` | 只初始化行情库 |
@@ -342,6 +343,53 @@ A股日频指标信号 | 交易日 2026-10-12
 
 文件输出（默认写在 `data/reports/`）：`volscan_<交易日>.csv|.xlsx`、`signals_<交易日>.csv|.xlsx`
 （CSV 为 utf-8-sig，Excel 双击即开；xlsx 带"参数与统计"sheet）。在 `report.formats` 里加 `json` 还会输出 JSON。
+
+## 收盘复盘总结（DeepSeek，可选）
+
+当天数据齐了之后（默认 **17:00**，见 `summary.only_after`），`emscan run` 会把六个按钮的命中汇总成一份
+结构化摘要，再交给 DeepSeek 写中文复盘：今日主线与板块集中度、结构性特征（低位反转还是高位放量）、
+多信号共振个股、需要自行核实的地方。**没配密钥就出"规则版"**（只有本地数据统计，不调 AI）。
+
+- 落库 `daily_summary` 表，同时写出 `data/reports/summary_<交易日>.md`
+- 网页端顶部有"当日总结"（看正文）和"下载总结"（下载 Markdown）
+- 密钥入口（优先级从高到低）：环境变量 `DEEPSEEK_API_KEY`（推荐写进 `/etc/emscan/emscan.env` 或 `.env`）、
+  `config.yaml: summary.api_key`、命令行 `--api-key`
+- 手动补跑：`python3 -m emscan summary --force`；只想出规则版加 `--rule`
+
+### 模型与思考模式（这里有坑）
+
+```yaml
+summary:
+  model: deepseek-flash      # 或 deepseek-v4-pro（更强、更慢、更贵）
+  thinking: true             # 默认开：复盘要跨六个按钮找主线、辨消息面共振
+  reasoning_effort: high     # none / low / high / max（none = 关思考）
+  max_tokens: 32000          # 生成上限，官方允许 1~393216；填 0 = 不传，用官方默认
+  timeout: 240               # 思考模式更慢，非流式一次回完，读超时给足
+  only_after: "17:00"        # 几点之后才生成（避开 15:32 那次数据不全）
+```
+
+三点值得记住：
+
+1. **思考 token 也算进 `max_tokens`**。官方默认是"非思考 8K / 思考 64K / `effort=max` 128K"；
+   预算给小了（比如 1600），思考把额度吃光，正文就是空的 —— 这正是之前"生成 0 字"的成因。
+   现在默认 32000；想更省可以调小，填 `0` 则交给官方默认值。
+2. **`reasoning_effort` 只在开思考时生效**：`none`（= 关思考）/ `low` / `high` / `max`；
+   老写法 `medium`、`xhigh` 会映射到 `high`，`minimal` 映射到 `low`。
+3. **`temperature` 在思考模式下不生效**（官方文档），只有关掉思考才由它控制发散度。
+
+两道保险都不需要你干预：接口不认 `max_tokens`/`reasoning_effort`（400）→ 自动去掉这两个参数重试；
+思考模式返回空正文或被截断（`finish_reason=length`）→ 自动改用非思考模式重试一次，并保留能用的那份。
+日志里会写清 `finish_reason`、思考字数、`usage`；落库的 `engine` 带思考档位（如
+`deepseek-flash(thinking=high)`），网页上一眼能确认这份复盘到底开没开思考。
+
+`python3 -m emscan check` 会打印当前档位，例如：
+
+```
+  当日总结：模型 deepseek-flash · 思考模式 reasoning_effort=high（max_tokens 32000）· 17:00 之后生成 · 密钥 已配置（环境变量/环境文件，长度 35）
+```
+
+成本参考：思考 token 按输出计费（`deepseek-flash` 输出 $0.6/1M，off-peak 半价），一份复盘通常几万 token 以内；
+官方"峰值时段"是北京时间 09:00–12:00 与 14:00–18:00（周一到周五），17:15 那次生成落在峰值内。
 
 ## 配置
 

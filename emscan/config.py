@@ -135,7 +135,7 @@ DEFAULTS: Dict[str, Any] = {
         "max_pos60": 0.35,  # 或 60 日区间位置 <= 0.35
         "min_drop20": 0.15,  # 或 20 日跌幅 >= 15%（短期超跌）
         "surge_vol_ratio": 1.8,  # 底部放量大涨：量 >= 1.8 倍
-        "surge_pct_chg": 4.0,  #                    且涨幅 >= 4%
+        "surge_pct_chg": 4.0,  # 且涨幅 >= 4%
         "shrink_ratio": 0.6,  # 缩量止跌：量 <= 0.6 倍
         "shrink_window": 5,
         "min_amount": 15_000_000,
@@ -172,12 +172,12 @@ DEFAULTS: Dict[str, Any] = {
         "api_key_env": "DEEPSEEK_API_KEY",
         "base_url": "https://api.deepseek.com",
         "model": "deepseek-flash",  # 或 deepseek-v4-pro（更强）；旧名 deepseek-chat 已过时
-        "temperature": 0.3,
-        "max_tokens": 8000,  # 思考 token 也算在里面，留足余量
-        # 需要更强的推理时打开（文档：flash 也支持 thinking）
-        "thinking": True,  # 复盘是综合判断：默认开思考（想更省就关掉）
-        "reasoning_effort": "high",  # 仅 thinking: true 时生效；可填 low / medium / high
-        "timeout": 90,
+        "temperature": 0.3,  # 思考模式下不生效（官方文档），只有关掉思考才用它控制发散度
+        "max_tokens": 32000,  # 生成上限，官方允许 1~393216；**思考 token 也算在里面**。填 0 = 不传，用官方默认（思考 64K / 非思考 8K）
+        # 复盘是综合判断（跨按钮找主线、辨消息面共振），默认开思考
+        "thinking": True,  # 想更省/更快就设 false（等价于 reasoning_effort: none）
+        "reasoning_effort": "high",  # none / low / high / max（none=关思考；max 预算更大、更慢）
+        "timeout": 240,  # 思考模式更慢；非流式一次回完，给足读超时
         "top_symbols": 15,  # 每个按钮给 AI 看前 N 只
     },
     "web": {
