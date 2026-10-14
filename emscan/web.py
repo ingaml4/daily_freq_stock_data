@@ -47,43 +47,205 @@ log = logging.getLogger("emscan")
 VIEWS: Dict[str, Dict[str, str]] = {
     "vol_spike": {
         "flag": "s_vol_spike",
+        "columns": (
+            "code",
+            "name",
+            "board",
+            "close",
+            "pct_chg",
+            "amount_yi",
+            "turnover",
+            "vol_ratio_5",
+            "vol_ratio_20",
+            "vol_z60",
+            "vol_signal",
+        ),
         "nav": "放量大涨",
         "title": "放量大涨（放量且当日涨幅达标，放量下跌不再展示）",
         "min_pct_chg": True,
+        "columns": (
+            "code",
+            "name",
+            "board",
+            "close",
+            "pct_chg",
+            "amount_yi",
+            "turnover",
+            "vol_ratio_5",
+            "vol_ratio_20",
+            "vol_z60",
+            "vol_signal",
+        ),
         "sort": "amount_yi",
         "order": "desc",
     },
     "macd_golden": {
         "flag": "s_macd_golden",
+        "columns": (
+            "code",
+            "name",
+            "board",
+            "close",
+            "pct_chg",
+            "amount_yi",
+            "turnover",
+            "macd_diff",
+            "macd_dea",
+            "macd_bar",
+        ),
         "nav": "MACD金叉",
+        "columns": (
+            "code",
+            "name",
+            "board",
+            "close",
+            "pct_chg",
+            "amount_yi",
+            "turnover",
+            "macd_diff",
+            "macd_dea",
+            "macd_bar",
+        ),
         "title": "MACD 金叉（DIFF 上穿 DEA）",
         "sort": "amount_yi",
         "order": "desc",
     },
     "kdj_golden": {
         "flag": "s_kdj_golden",
+        "columns": (
+            "code",
+            "name",
+            "board",
+            "close",
+            "pct_chg",
+            "amount_yi",
+            "turnover",
+            "kdj_k",
+            "kdj_d",
+            "kdj_j",
+        ),
         "nav": "KDJ金叉",
+        "columns": (
+            "code",
+            "name",
+            "board",
+            "close",
+            "pct_chg",
+            "amount_yi",
+            "turnover",
+            "kdj_k",
+            "kdj_d",
+            "kdj_j",
+        ),
         "title": "KDJ 金叉（K 上穿 D）",
         "sort": "amount_yi",
         "order": "desc",
     },
     "boll_break_lower": {
         "flag": "s_boll_break_lower",
+        "columns": (
+            "code",
+            "name",
+            "board",
+            "close",
+            "pct_chg",
+            "amount_yi",
+            "turnover",
+            "boll_pos",
+            "boll_lower",
+            "boll_mid",
+            "boll_upper",
+        ),
         "nav": "布林下轨",
+        "columns": (
+            "code",
+            "name",
+            "board",
+            "close",
+            "pct_chg",
+            "amount_yi",
+            "turnover",
+            "boll_pos",
+            "boll_lower",
+            "boll_mid",
+            "boll_upper",
+        ),
         "title": "BOLL 下轨突破（收盘 ≤ 下轨）",
         "sort": "boll_pos",
         "order": "asc",
     },
     "reversal": {
         "flag": "s_reversal",
+        "columns": (
+            "code",
+            "name",
+            "board",
+            "close",
+            "pct_chg",
+            "amount_yi",
+            "turnover",
+            "rev_score",
+            "rev_signals",
+            "doji_vol_ratio",
+            "doji_drawdown",
+            "doji_stop_pos",
+            "doji_body",
+            "doji_lower",
+        ),
         "nav": "反转信号",
+        "columns": (
+            "code",
+            "name",
+            "board",
+            "close",
+            "pct_chg",
+            "amount_yi",
+            "turnover",
+            "rev_score",
+            "rev_signals",
+            "doji_vol_ratio",
+            "doji_drawdown",
+            "doji_stop_pos",
+            "doji_body",
+            "doji_lower",
+        ),
         "title": "底部反转信号（评分制：底部上下文 + 量价证据叠加，分越高越强）",
         "sort": "rev_score",
         "order": "desc",
     },
     "box_range": {
         "flag": "s_box_range",
+        "columns": (
+            "code",
+            "name",
+            "board",
+            "close",
+            "pct_chg",
+            "amount_yi",
+            "turnover",
+            "box_pos",
+            "box_width",
+            "box_high",
+            "box_low",
+            "box_avg_turnover",
+            "box_avg_amplitude",
+        ),
         "nav": "箱体做T",
+        "columns": (
+            "code",
+            "name",
+            "board",
+            "close",
+            "pct_chg",
+            "amount_yi",
+            "turnover",
+            "box_pos",
+            "box_width",
+            "box_high",
+            "box_low",
+            "box_avg_turnover",
+            "box_avg_amplitude",
+        ),
         "title": "箱体震荡 + 换手健康（做 T 备选：越贴箱底越靠前）",
         "sort": "box_pos",
         "order": "asc",
@@ -91,6 +253,34 @@ VIEWS: Dict[str, Dict[str, str]] = {
 }
 
 DEFAULT_VIEW = "vol_spike"
+
+# 每个按钮的表格列：基础信息 + 该按钮相关的指标（不再所有视图共用一张大表）
+BASE_COLUMNS = ("code", "name", "board", "close", "pct_chg", "amount_yi", "turnover")
+VIEW_COLUMNS: Dict[str, tuple] = {
+    "vol_spike": BASE_COLUMNS + ("vol_ratio_5", "vol_ratio_20", "vol_z60", "vol_signal"),
+    "macd_golden": BASE_COLUMNS + ("macd_diff", "macd_dea", "macd_bar"),
+    "kdj_golden": BASE_COLUMNS + ("kdj_k", "kdj_d", "kdj_j"),
+    "boll_break_lower": BASE_COLUMNS + ("boll_pos", "boll_lower", "boll_mid", "boll_upper"),
+    "box_range": BASE_COLUMNS
+    + (
+        "box_pos",
+        "box_width",
+        "box_high",
+        "box_low",
+        "box_avg_turnover",
+        "box_avg_amplitude",
+    ),
+    "reversal": BASE_COLUMNS
+    + (
+        "rev_score",
+        "rev_signals",
+        "doji_vol_ratio",
+        "doji_drawdown",
+        "doji_stop_pos",
+        "doji_body",
+        "doji_lower",
+    ),
+}
 
 # 表格列：(字段, 表头, 数值格式, 可排序)
 COLUMNS: Tuple[Tuple[str, str, Optional[str], bool], ...] = (
@@ -125,6 +315,9 @@ COLUMNS: Tuple[Tuple[str, str, Optional[str], bool], ...] = (
     ("rev_signals", "证据", None, False),
     ("doji_vol_ratio", "量/前5日均", "{:.2f}", True),
     ("doji_drawdown", "距60日高点%", "{:+.1%}", True),
+    ("vol_signal", "放量形态", None, False),
+    ("doji_lower", "下影%", "{:.2%}", True),
+    ("doji_upper", "上影%", "{:.2%}", True),
     ("signals_cn", "命中信号", None, False),
 )
 
@@ -1012,8 +1205,11 @@ def render_html(
             f'{html.escape(spec["nav"])}</a>'
         )
 
+    view_columns = VIEW_COLUMNS.get(ctx.view) or tuple(k for k, _, _, _ in COLUMNS)
+    _by_key = {c[0]: c for c in COLUMNS}
+    active_columns = [_by_key[key] for key in view_columns if key in _by_key]
     head_cells = []
-    for key, label, _, sortable in COLUMNS:
+    for key, label, _, sortable in active_columns:
         cls = "left" if key in ("code", "name", "board", "signals_cn") else ""
         if sortable:
             # 排序纯前端：表头不带任何链接/参数（地址栏始终只有 view + date）
@@ -1031,7 +1227,7 @@ def render_html(
     body_rows = []
     for row in ctx.rows:
         cells = []
-        for key, label, fmt, _ in COLUMNS:
+        for key, label, fmt, _ in active_columns:
             if key == "code":
                 cells.append(
                     f'<td class="left"><a href="{html.escape(row["url"])}" target="_blank" '

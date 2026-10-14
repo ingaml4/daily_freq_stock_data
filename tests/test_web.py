@@ -483,6 +483,24 @@ def test_http_server_token_guard(tmp_path):
         httpd.server_close()
 
 
+def test_each_view_has_its_own_columns(tmp_path):
+    """每个按钮只显示"基础信息 + 自己相关的列"（放量的表里不该出现 DIFF/KDJ）。"""
+    _, store, date = _seed(tmp_path)
+    vol = render_html(build_context(store, view="vol_spike"))
+    assert "量比5" in vol and "DIFF" not in vol and "箱体位置" not in vol
+    macd = render_html(build_context(store, view="macd_golden"))
+    assert "DIFF" in macd and "DEA" in macd and "量比5" not in macd
+    kdj = render_html(build_context(store, view="kdj_golden"))
+    assert "K" in kdj and "DIFF" not in kdj
+    box = render_html(build_context(store, view="box_range"))
+    assert "箱体位置" in box and "DIFF" not in box
+    rev = render_html(build_context(store, view="reversal"))
+    assert "反转分" in rev and "证据" in rev and "DIFF" not in rev
+    for page in (vol, macd, kdj, box, rev):
+        assert "成交额(亿)" in page and "换手率%" in page  # 基础信息每个视图都有
+    store.close()
+
+
 def test_serve_accepts_all_cli_options(tmp_path):
     """regression：cmd_web 传给 serve() 的每个参数都必须在签名里（曾漏过 vol_up_min_pct）。"""
     _, store, date = _seed(tmp_path)
