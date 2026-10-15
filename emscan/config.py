@@ -119,6 +119,18 @@ DEFAULTS: Dict[str, Any] = {
         # 每个按钮"行业分布"里最多列几个行业（0=全部）
         "top_industries": 0,
     },
+    # 复盘梯队名单（第一/第二梯队）与跟踪回测
+    "tiers": {
+        # 喂给 AI 的名单规模上限（提示词里会写明，解析时也按它兜底）
+        "max_tier1": 8,
+        "max_tier2": 15,
+    },
+    "backtest": {
+        # next_open=T+1 开盘买入（默认，复盘收盘后才生成，实盘只能次日买）；close=T 日收盘买入
+        "entry": "next_open",
+        "horizons": [1, 5, 10, 20],  # 交易日
+        "days": 90,  # 页面上默认看最近多少个名单日
+    },
     # 箱体震荡 + 换手健康（做 T 备选池）——判定口径见 emscan/box.py 顶部注释
     "box": {
         "enabled": True,

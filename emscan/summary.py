@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from .industry import display_map as _industry_map
+from .backtest import sync_tier_picks, tier_limits
 from .store import Store
 from .tzutil import now_hm
 from .views import view_criteria, vol_up_mask
@@ -98,6 +99,28 @@ PROMPT = """你是 A 股复盘分析师。下面是程序在 {date} 收盘后扫
 本次数据的局限（未提供行业、资金流向、公告新闻；指标只基于日线收盘价）、容易误判的地方
 （布林下轨数量多≠马上反转、KDJ 金叉在下跌趋势中容易钝化、放量大涨里滞涨样本的含义），
 最后给出 **3~8 条可执行的跟踪清单**：看什么、什么条件算确认、什么条件算否证。
+
+## 七、跟踪名单（机器可读，格式一个字都不要改）
+
+这一节是给程序用的：**整篇最后**必须原样输出下面两行，每行以 `TIER1:` / `TIER2:` 开头，
+条目之间用 `|` 分隔，每条是 `6位代码 名称`（可以不写理由；要写就写在括号里）。
+
+```
+TIER1: 301591 肯特股份 | 603344 星德胜 | 301181 标榜股份
+TIER2: 301220 亚香股份 | 600316 洪都航空 | 301010 晶雪节能
+```
+
+选取规则：
+- **第一梯队**=次日（T+1）最值得跟踪的 3~{tier1} 只：优先多信号共振、底部放量或缩量止跌已被
+  量价确认、位置（60 日/20 日）不高的；宁可少而精，也不要把滞涨、冲高回落、J 值过热的塞进来；
+- **第二梯队**=次优的 3~{tier2} 只，作为备选与对照（比如共振但涨幅偏低、证据够但还缺确认阳线）；
+- 只能从上面 `views` 名单里挑，**代码必须 6 位数字且与名称对应**——程序会按代码回查本地行情，
+  对不上的会丢弃并记一条"AI 写错"；
+- 当日确实没有合格标的，就写 `TIER1: （空）`，不要硬凑、不要编造代码；
+- `TIER2:` 行之后不要再写任何内容（这两行是全篇的结尾）。
+
+这两档名单会被程序按 **T+1 开盘买入、1/5/10/20 交易日**跟踪回测并长期打分，
+所以请按"最可能跑出正收益"来排序，而不是按当场涨幅从高到低。
 
 硬性要求：
 - 只依据给定数据分析，**不要编造新闻、公告、事件、行业、资金流向**；数据没有的就写"数据未提供"。
@@ -607,8 +630,9 @@ def generate_summary(
     if api_key:
         try:
             top_n = int(cfg.get("summary.top_symbols", 0) or 0)
+            limits = tier_limits(cfg)
             prompt = (
-                PROMPT.format(date=trade_date)
+                PROMPT.format(date=trade_date, tier1=limits[1], tier2=limits[2])
                 + "\n\n数据如下：\n"
                 + digest_text(digest, top_n)
             )
@@ -631,6 +655,19 @@ def generate_summary(
         "digest": json.dumps(digest_for_store(digest), ensure_ascii=False),
     }
     store.save_summary(record)
+    # 复盘落库后顺手把 TIER1/TIER2 两行解析成梯队名单（回测页面的数据来源）
+    if engine and not str(engine).startswith("rule"):
+        try:
+            stats = sync_tier_picks(store, cfg, dates=[str(trade_date)])
+            log.info(
+                "梯队名单已解析：交易日 %s · 第一梯队 %s 只 / 第二梯队 %s 只%s",
+                trade_date,
+                stats.get("tier1", 0),
+                stats.get("tier2", 0),
+                f"（{len(stats['unmatched'])} 只对不上本地股票）" if stats.get("unmatched") else "",
+            )
+        except Exception as exc:  # 解析失败不影响复盘本身
+            log.warning("梯队名单解析失败（复盘正文已保留）：%s", exc)
     return record
 
 

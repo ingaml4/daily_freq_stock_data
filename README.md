@@ -42,6 +42,7 @@ bash scripts/daily_scan.sh                  # 以后每天由 cron 跑这一条
 | `python3 -m emscan box [--trade-date ...]` | 筛**箱体震荡 + 换手健康**的票（做 T 备选池） |
 | `python3 -m emscan doji [--trade-date ...]` | 筛**低位缩量十字星**（超跌企稳观察信号） |
 | `python3 -m emscan industry [--force] [--kinds sw,sw2]` | 同步**行业/概念归属**（复盘"行业维度"靠它，源数据每周六更新） |
+| `python3 -m emscan tiers [--sync] [--days N] [--json] [--out x.csv]` | **复盘梯队回测**：第一/第二梯队的 1/5/10/20 交易日跟踪（含超额） |
 | `python3 -m emscan hits [--date ...] [--secid ...] [--only ...]` | **查每日信号缓存**（四个主信号，不联网、秒回） |
 | `python3 -m emscan summary [--force] [--force-rule]` | 生成当日复盘总结（有 `DEEPSEEK_API_KEY` 走 AI，没有就出规则版） |
 | `python3 -m emscan web [--host ...] [--port ...] [--password ...]` | **起网页端**：四个查询按钮 + 可排序表格（口令登录，代码跳雪球） |
@@ -53,7 +54,7 @@ bash scripts/daily_scan.sh                  # 以后每天由 cron 跑这一条
 
 ## 数据表粒度：一行到底是什么
 
-一共 5 张业务表，粒度和用途都不一样（`data/market.sqlite`，`sqlite3` 直接就能查）：
+一共 6 张业务表，粒度和用途都不一样（`data/market.sqlite`，`sqlite3` 直接就能查）：
 
 | 表 | 一行 = | 字段 | 谁写 |
 | --- | --- | --- | --- |
@@ -62,6 +63,7 @@ bash scripts/daily_scan.sh                  # 以后每天由 cron 跑这一条
 | `indicators` | **一只股票 × 一个交易日**（技术指标原始值） | `secid, date, macd_diff/macd_dea/macd_bar, kdj_k/kdj_d/kdj_j, boll_upper/boll_mid/boll_lower, ma5/ma10/ma20/ma60, source` | 麦蕊指标接口 |
 | `daily_signals` | **一只股票 × 一个交易日（宽表：行情 + 放量 + 指标 + 信号标记）** | 见下 | `scan` 写放量那几列，`signals` 写指标与标记那几列 |
 | `symbol_tags` | **一只股票 × 一个行业/概念节点**（归属，源数据每周六更新） | `secid, kind(sw/sw2/gn…), code, name, updated_at` | `industry`（`run` 里按周自动补） |
+| `tier_picks` | **一个名单日 × 梯队 × 一只股票**（复盘给的第一/第二梯队） | `date, tier(1/2), secid, code, name, reason, source, created_at` | 复盘生成后自动解析（`tiers --sync` 可补历史） |
 
 `daily_signals` 一行 41 列，就是"当天这只票的全部结论"：
 
@@ -420,6 +422,40 @@ summary:
 
 成本参考：思考 token 按输出计费（`deepseek-flash` 输出 $0.6/1M，off-peak 半价），一份复盘通常几万 token 以内；
 官方"峰值时段"是北京时间 09:00–12:00 与 14:00–18:00（周一到周五），17:15 那次生成落在峰值内。
+
+## 复盘梯队回测（第一/第二梯队 1/5/10/20 交易日）
+
+复盘最后会固定输出两行**机器可读**名单（`summary` 提示词里写死了格式）：
+
+```
+TIER1: 301591 肯特股份 | 603344 星德胜
+TIER2: 301220 亚香股份 | 600316 洪都航空
+```
+
+程序在复盘落库后**自动解析**这两行进 `tier_picks` 表（代码会按本地行情回查校验，对不上的丢弃并在
+日志/页面上列出来），然后按下面的口径跟踪，用"这个梯队到底赚不赚钱"来打分：
+
+| 口径 | 取值 | 为什么 |
+| --- | --- | --- |
+| 入场 | **T+1 开盘价**（`backtest.entry: next_open`） | 复盘是收盘后 17:15 生成的，当天买不进去；`close` 是理想化的 T 日收盘买入 |
+| 持有 | **1 / 5 / 10 / 20 个交易日**（`backtest.horizons`） | 按交易日算，节假日不会把窗口拉歪 |
+| 收益 | 卖出日收盘 ÷ 买入价 − 1 | |
+| 基准 | 同一时间窗**全市场等权** | 没有超额就分不清"名单好"还是"当天大盘好" |
+| 跟踪中 | 持有期未走完 | 收益留空，不拿没发生的数据充数 |
+
+网页端：`/tiers`（导航栏"梯队回测"）——① 按梯队汇总（均值/胜率/超额/最大回撤）② 按名单日
+③ 个股明细（代码可跳雪球），右上角可切"最近 7 天/30 天/90 天/全部"，也能下载 CSV 或用 `/api/tiers`。
+
+命令行：
+
+```bash
+python3 -m emscan tiers --sync          # 先从历史复盘里补解析名单，再出报表
+python3 -m emscan tiers --days 30 --out /tmp/tiers.csv
+python3 -m emscan tiers --json          # 给看板/脚本用
+```
+
+注意：**今天之前的老复盘**（提示词还没要求 TIER 行）会用"第一梯队为…"这类句子兜底解析，
+能捞到大部分名单，但质量不如新格式；样本少的时候别急着下结论，至少攒够 20~30 个名单日再看胜率。
 
 ## 配置
 

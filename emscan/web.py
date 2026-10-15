@@ -39,6 +39,8 @@ from .mairui import BOARD_LABELS
 from .signals import FLAG_LABELS
 from .store import Store
 from .tzutil import now_hm, today as tz_today
+from .backtest import entry_mode as tiers_entry_mode
+from .backtest import report as tiers_report
 # 按钮口径只有一份（emscan/views.py）：网页的悬浮提示与复盘给 AI 的口径说明共用
 # build_view_help 保留在这里只为兼容旧的 `from emscan.web import build_view_help`
 from .views import build_view_help, plain_help  # noqa: F401
@@ -365,6 +367,13 @@ def _industry_kind(store: Store) -> str:
     except sqlite3.Error as exc:  # 老库没有这张表也能正常出页面
         log.debug("读行业归属失败：%s", exc)
     return ""
+
+
+class _NullCfg:
+    """``make_handler`` 没拿到 Config 时的兜底（测试/嵌入式用法）：一律返回默认值。"""
+
+    def get(self, _key: str, default: Any = None) -> Any:
+        return default
 
 
 def sort_expression(key: str) -> str:
@@ -1263,6 +1272,7 @@ def render_html(
     <a class="refresh" href="/signals/{ctx.view}">刷新</a>
     <a class="refresh" href="/summary" title="收盘后（17:00 之后）自动生成的当日复盘">当日总结</a>
     <a class="refresh" href="/summary.md" download title="下载 Markdown">下载总结</a>
+    <a class="refresh" href="/tiers" title="复盘第一/第二梯队的 1/5/10/20 交易日跟踪回测">梯队回测</a>
     {board_filter}
   </form>
 </header>
@@ -1280,6 +1290,209 @@ def render_html(
 
 def render_json(ctx: PageContext) -> str:
     return json.dumps(ctx.as_dict(), ensure_ascii=False, indent=2)
+
+
+# --------------------------------------------------------------- 梯队回测页面
+TIERS_CSS = """\
+:root{--bg:#0f1115;--card:#171a21;--line:#262b36;--fg:#e8ecf3;--muted:#98a2b3;
+--up:#ff5c5c;--down:#3ddc97;--accent:#4aa8ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",Arial,sans-serif}
+a{color:var(--accent);text-decoration:none}
+header{position:sticky;top:0;z-index:5;background:rgba(15,17,21,.96);
+border-bottom:1px solid var(--line);padding:10px 12px}
+main{padding:12px 12px 40px}
+h1{margin:0 0 6px;font-size:17px}
+h2{margin:20px 0 8px;font-size:15px}
+.hint{color:var(--muted);font-size:12.5px}
+.toolbar{padding:8px 12px;border-bottom:1px solid var(--line);font-size:12.5px;
+color:var(--muted);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.toolbar a,.toolbar span.on{padding:5px 9px;border:1px solid var(--line);border-radius:8px}
+.toolbar span.on{border-color:var(--accent);color:var(--fg)}
+.wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;font-size:13px;white-space:nowrap}
+th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:right}
+th{position:sticky;top:0;background:#12151b;color:var(--muted);font-weight:600;z-index:2}
+th:first-child,td:first-child,th.l,td.l{text-align:left}
+tr:hover td{background:#141821}
+.pos{color:var(--up)}.neg{color:var(--down)}.muted{color:var(--muted)}
+.tag{display:inline-block;padding:1px 6px;border-radius:6px;border:1px solid var(--line);
+font-size:12px;color:var(--muted)}
+.t1{border-color:#7a5a1e;color:#ffd479}.t2{border-color:#245c3a;color:#7fe0ab}
+.banner{border-radius:10px;padding:10px 12px;margin:10px 0;font-size:13px;
+background:#3a2a12;border:1px solid #7a5a1e}
+footer{margin-top:24px;color:var(--muted);font-size:12px}
+"""
+
+TIERS_DAY_OPTIONS: Tuple[Tuple[int, str], ...] = ((7, "最近 7 个名单日"), (30, "30 天"), (90, "90 天"), (0, "全部"))
+
+
+def _pct(value: Any, digits: int = 2) -> str:
+    """百分比单元格：正红负绿（A 股习惯），空值给个灰点。"""
+    if value is None:
+        return '<span class="muted">-</span>'
+    number = float(value) * 100.0
+    cls = "pos" if number > 0 else ("neg" if number < 0 else "muted")
+    return f'<span class="{cls}">{number:+.{digits}f}%</span>'
+
+
+def render_tiers_page(
+    result: Dict[str, Any],
+    *,
+    title: str = "A股日频信号",
+    days: int = 90,
+    entry: str = "next_open",
+) -> str:
+    """梯队回测页：按梯队汇总 + 按名单日 + 个股明细，手机上也能横向滑动看。"""
+    horizons = [int(h) for h in (result.get("horizons") or [])]
+    entry_cn = "T+1 开盘买入" if entry == "next_open" else "T 日收盘买入"
+    hold_cn = "、".join(f"{h}" for h in horizons)
+
+    day_links = []
+    for value, label in TIERS_DAY_OPTIONS:
+        if value == days:
+            day_links.append(f'<span class="on">{html.escape(label)}</span>')
+        else:
+            day_links.append(f'<a href="/tiers?days={value}">{html.escape(label)}</a>')
+    toolbar = (
+        '<div class="toolbar"><a href="/">← 信号页</a>'
+        + "".join(day_links)
+        + f'<a href="/tiers.csv?days={days}" download>下载 CSV</a>'
+        + f'<a href="/api/tiers?days={days}">JSON</a></div>'
+    )
+
+    hint = (
+        f'<p class="hint">口径：<b>{entry_cn}</b>（复盘是收盘后生成的，当天买不进去）· '
+        f"持有 <b>{hold_cn}</b> 个交易日（收益 = 卖出日收盘 ÷ 买入价 − 1）· "
+        "对照基准 = 同一时间窗<b>全市场等权</b>收益，超额 = 个股 − 基准 · "
+        "「跟踪中」= 持有期还没走完，不拿没发生的数据充数。</p>"
+    )
+
+    rows = result.get("rows") or []
+    if not rows:
+        body = (
+            '<div class="banner">还没有梯队名单。复盘（17:15 那次）生成后会自动解析文末的 '
+            "<code>TIER1/TIER2</code> 两行；历史复盘也可以补："
+            "<code>python3 -m emscan tiers --sync</code>。</div>"
+        )
+        return _tiers_page_shell(title, toolbar, hint + body, "")
+
+    # ① 按梯队汇总（这正是"哪个梯队真有用"的答案）
+    head = '<tr><th class="l">梯队</th><th>样本</th>' + "".join(
+        f"<th>{h}日 均值</th><th>胜率</th><th>超额</th>" for h in horizons
+    ) + "<th>最大回撤均值</th><th>期间最大涨幅均值</th></tr>"
+    lines = []
+    for item in (result.get("by_tier") or {}).values():
+        cells = [
+            f'<td class="l"><span class="tag t{int(item["tier"]) if int(item["tier"]) in (1, 2) else 2}">'
+            f'{html.escape(str(item["label"]))}</span></td>',
+            f'<td>{item["picks"]} <span class="muted">(完成 {item["finished"]})</span></td>',
+        ]
+        for horizon in horizons:
+            stats = item.get(str(horizon)) or {}
+            if not stats.get("n"):
+                cells.extend(["<td>-</td>", "<td>-</td>", "<td>-</td>"])
+                continue
+            cells.append(f"<td>{_pct(stats.get('avg'))}</td>")
+            cells.append(f'<td>{stats["win_rate"] * 100:.0f}%</td>')
+            cells.append(f"<td>{_pct(stats.get('avg_excess'))}</td>")
+        cells.append(f'<td>{_pct(item.get("avg_max_drawdown"), 1)}</td>')
+        cells.append(f'<td>{_pct(item.get("avg_max_gain"), 1)}</td>')
+        lines.append("<tr>" + "".join(cells) + "</tr>")
+    by_tier_table = f'<div class="wrap"><table>{head}{"".join(lines)}</table></div>'
+
+    # ② 按名单日
+    head = '<tr><th class="l">名单日</th><th class="l">梯队</th><th>只数</th>' + "".join(
+        f"<th>{h}日 均值</th><th>{h}日 超额</th>" for h in horizons
+    ) + "<th>状态</th></tr>"
+    lines = []
+    for item in result.get("by_date") or []:
+        cells = [
+            f'<td class="l">{html.escape(str(item["date"]))}</td>',
+            f'<td class="l">{html.escape(str(item["tier_label"]))}</td>',
+            f'<td>{item["picks"]}</td>',
+        ]
+        for horizon in horizons:
+            cells.append(f'<td>{_pct((item.get("avg") or {}).get(str(horizon)))}</td>')
+            cells.append(f'<td>{_pct((item.get("excess") or {}).get(str(horizon)))}</td>')
+        status_cls = "muted" if item.get("status") != "已完成" else ""
+        cells.append(f'<td class="{status_cls}">{html.escape(str(item.get("status") or ""))}</td>')
+        lines.append("<tr>" + "".join(cells) + "</tr>")
+    by_date_table = f'<div class="wrap"><table>{head}{"".join(lines)}</table></div>'
+
+    # ③ 个股明细
+    head = (
+        '<tr><th class="l">名单日</th><th class="l">梯队</th><th class="l">代码</th>'
+        '<th class="l">名称</th><th class="l">行业</th><th>买入价</th>'
+        + "".join(f"<th>{h}日</th>" for h in horizons)
+        + "<th>超额(1日)</th><th>期间最大涨</th><th>期间最大回撤</th><th>状态</th></tr>"
+    )
+    lines = []
+    for row in rows:
+        code = html.escape(str(row.get("code") or ""))
+        secid = str(row.get("secid") or "")
+        url = xueqiu_url(secid) if secid else ""
+        link = f'<a href="{html.escape(url)}" target="_blank" rel="noopener">{code}</a>'
+        cells = [
+            f'<td class="l">{html.escape(str(row.get("date") or ""))}</td>',
+            f'<td class="l">{html.escape(str(row.get("tier_label") or ""))}</td>',
+            f'<td class="l">{link}</td>',
+            f'<td class="l">{html.escape(str(row.get("name") or ""))}</td>',
+            f'<td class="l">{html.escape(str(row.get("industry") or ""))}</td>',
+            "<td>" + ("-" if row.get("entry") is None else f"{float(row['entry']):.2f}") + "</td>",
+        ]
+        for horizon in horizons:
+            cells.append(f'<td>{_pct((row.get("rets") or {}).get(horizon))}</td>')
+        cells.append(f'<td>{_pct((row.get("excess") or {}).get(horizons[0] if horizons else 1))}</td>')
+        cells.append(f'<td>{_pct(row.get("max_gain"), 1)}</td>')
+        cells.append(f'<td>{_pct(row.get("max_drawdown"), 1)}</td>')
+        status = str(row.get("status") or "")
+        cells.append(
+            f'<td class="{"muted" if status != "已完成" else ""}">{html.escape(status)}</td>'
+        )
+        lines.append("<tr>" + "".join(cells) + "</tr>")
+    detail_table = f'<div class="wrap"><table>{head}{"".join(lines)}</table></div>'
+
+    unmatched = ""
+    if result.get("unmatched"):
+        items = "、".join(
+            f'{html.escape(str(it.get("date")))} 第{it.get("tier")}梯队 '
+            f'{html.escape(str(it.get("code") or it.get("name")))}'
+            for it in result["unmatched"][:12]
+        )
+        unmatched = (
+            '<div class="banner">有几条名单对不上本地股票（AI 写错代码/名称，或已退市），已丢弃：'
+            f"{items}</div>"
+        )
+
+    body = (
+        hint
+        + f"<p class='hint'>共 {len(rows)} 条跟踪记录 · "
+        + f'{len(result.get("by_date") or [])} 个（名单日 × 梯队）</p>'
+        + unmatched
+        + "<h2>① 按梯队汇总（累计所有名单日）</h2>"
+        + by_tier_table
+        + "<h2>② 按名单日</h2>"
+        + by_date_table
+        + "<h2>③ 个股明细</h2>"
+        + detail_table
+    )
+    return _tiers_page_shell(title, toolbar, body, "")
+
+
+def _tiers_page_shell(title: str, toolbar: str, body: str, _extra: str = "") -> str:
+    return (
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>梯队回测 · {html.escape(title)}</title><style>{TIERS_CSS}</style></head><body>"
+        f"<header><h1>梯队回测（复盘第一/第二梯队跟踪）</h1>"
+        f'<div class="hint">数据来自每份复盘文末的 TIER1/TIER2 名单 + 本地日线行情</div></header>'
+        f"{toolbar}<main>{body}</main>"
+        "<footer>代码点击跳转雪球行情 · 收益均按交易日计算 · "
+        "「跟踪中」表示持有期未走完，数字会随后续行情更新</footer>"
+        "</body></html>"
+    )
 
 
 def _render_pager(active_size: int) -> str:
@@ -1330,6 +1543,7 @@ def make_handler(
     vol_up_min_pct: float = 3.0,
     view_help: Optional[Dict[str, str]] = None,
     summary_after_cfg: str = "17:00",
+    backtest_cfg: Any = None,
 ) -> type:
     """生成一个 ``BaseHTTPRequestHandler`` 子类。
 
@@ -1351,6 +1565,11 @@ def make_handler(
     鉴权：设置了口令就要求登录（Cookie 会话），另外支持 HTTP Basic
     （``curl -u ":$口令"``）方便脚本/接口调用。口令为空则视为"开放访问"（只适合本机）。
     """
+    cfg_for_backtest = backtest_cfg if backtest_cfg is not None else _NullCfg()
+    try:
+        default_backtest_days = int(cfg_for_backtest.get("backtest.days", 90) or 90)
+    except (TypeError, ValueError):  # pragma: no cover - 配置写坏了不该影响网页
+        default_backtest_days = 90
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "emscan-web"
@@ -1471,6 +1690,73 @@ def make_handler(
                     self._redirect(f"/login?next={target}")
                 return
 
+            if path in ("/tiers", "/tiers.csv", "/api/tiers"):
+                days_value = params.get("days")
+                try:
+                    days = int(days_value) if days_value not in (None, "") else default_backtest_days
+                except ValueError:
+                    days = default_backtest_days
+                try:
+                    st = store_factory()
+                    result = tiers_report(st, cfg_for_backtest, days=days or None)
+                except Exception as exc:  # 页面永远要能打开
+                    log.exception("梯队回测渲染失败：%s", exc)
+                    self._send(
+                        f"服务端错误：{exc}".encode("utf-8"), 500, "text/plain; charset=utf-8"
+                    )
+                    return
+                if path == "/api/tiers":
+                    payload = json.dumps(result, ensure_ascii=False, indent=2)
+                    self._send(payload.encode("utf-8"), 200, "application/json; charset=utf-8")
+                    return
+                if path == "/tiers.csv":
+                    import csv
+                    import io
+
+                    buffer = io.StringIO()
+                    horizon_keys = [
+                        key
+                        for horizon in result.get("horizons") or []
+                        for key in (f"ret_{horizon}d", f"excess_{horizon}d")
+                    ]
+                    columns = [
+                        "date",
+                        "tier_label",
+                        "code",
+                        "name",
+                        "industry",
+                        "entry_date",
+                        "entry",
+                        "close_t",
+                        "status",
+                    ] + horizon_keys
+                    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
+                    writer.writeheader()
+                    for row in result.get("rows") or []:
+                        record = {key: row.get(key) for key in columns}
+                        for horizon in result.get("horizons") or []:
+                            record[f"ret_{horizon}d"] = (row.get("rets") or {}).get(horizon)
+                            record[f"excess_{horizon}d"] = (row.get("excess") or {}).get(horizon)
+                        writer.writerow(record)
+                    raw = buffer.getvalue().encode("utf-8-sig")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/csv; charset=utf-8")
+                    self.send_header(
+                        "Content-Disposition", 'attachment; filename="tiers_backtest.csv"'
+                    )
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                page = render_tiers_page(
+                    result,
+                    title=title,
+                    days=days,
+                    entry=tiers_entry_mode(cfg_for_backtest),
+                )
+                self._send(page.encode("utf-8"))
+                return
+
             if path in ("/summary", "/summary.md"):
                 st = store_factory()
                 date = str(params.get("date") or "") or (st.latest_summary_date() or "")
@@ -1505,7 +1791,8 @@ def make_handler(
                     "font:14px/1.7 -apple-system,'PingFang SC',Arial,sans-serif;margin:0;padding:14px}"
                     "pre{white-space:pre-wrap;word-break:break-word;background:#171a21;border:1px solid "
                     "#262b36;border-radius:10px;padding:12px}a{color:#4aa8ff}</style></head><body>"
-                    '<p><a href="/">← 返回</a> · <a href="/summary.md">下载 Markdown</a> · 引擎 %s</p>'
+                    '<p><a href="/">← 返回</a> · <a href="/summary.md">下载 Markdown</a> · '
+                    '<a href="/tiers">梯队回测</a> · 引擎 %s</p>'
                     "<pre>%s</pre></body></html>"
                 ) % (
                     str(record.get("date")),
@@ -1607,6 +1894,7 @@ def serve(
     vol_up_min_pct: float = 3.0,
     view_help: Optional[Dict[str, str]] = None,
     summary_after_cfg: str = "17:00",
+    backtest_cfg: Any = None,
     blocking: bool = True,
 ) -> ThreadingHTTPServer:
     """起一个网页服务，返回 server 对象（``blocking=False`` 时自己开线程，方便测试）。"""
@@ -1622,6 +1910,7 @@ def serve(
         vol_up_min_pct=vol_up_min_pct,
         view_help=view_help,
         summary_after_cfg=summary_after_cfg,
+        backtest_cfg=backtest_cfg,
     )
     httpd = ThreadingHTTPServer((host, int(port)), handler)
     log.info(

@@ -27,7 +27,7 @@ from .mairui import BAR_FIELDS, INDICATOR_MAP
 log = logging.getLogger(__name__)
 
 # 表结构版本号：改 SCHEMA / 迁移逻辑就 +1（init_schema 靠它决定要不要重建）
-SCHEMA_VERSION = 9  # 9: 新增 symbol_tags（行业/概念归属）
+SCHEMA_VERSION = 10  # 9: symbol_tags（行业/概念归属）；10: tier_picks（复盘梯队回测）
 
 DAILY_SIGNALS_VIEW = """CREATE VIEW IF NOT EXISTS daily_signals_named AS
 SELECT
@@ -224,6 +224,21 @@ CREATE TABLE IF NOT EXISTS symbol_tags (
 );
 
 CREATE INDEX IF NOT EXISTS idx_symbol_tags_kind ON symbol_tags(kind, secid);
+
+-- 复盘梯队名单（第一/第二梯队）：T 日复盘给出的观察名单，之后按 1/5/10/20 交易日跟踪
+CREATE TABLE IF NOT EXISTS tier_picks (
+    date       TEXT NOT NULL,   -- 产生名单的交易日 T（复盘日）
+    tier       INTEGER NOT NULL,-- 1=第一梯队 2=第二梯队
+    secid      TEXT NOT NULL,
+    code       TEXT,
+    name       TEXT,
+    reason     TEXT,            -- 入选理由（AI 给的短句，可空）
+    source     TEXT,            -- summary=从复盘解析；manual=手工添加
+    created_at TEXT,
+    PRIMARY KEY (date, tier, secid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tier_picks_date ON tier_picks(date DESC, tier);
 
 CREATE TABLE IF NOT EXISTS runs (
     run_id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -578,6 +593,70 @@ class Store:
             (str(key), str(value)),
         )
         self.conn.commit()
+
+    # ------------------------------------------------------ 复盘梯队（回测用）
+    def save_tier_picks(self, rows: Iterable[Dict[str, Any]]) -> int:
+        """写某个交易日的梯队名单（按日期整批覆盖，手工加的 manual 行保留）。"""
+        payload = []
+        stamp = _now()
+        dates = sorted({str(r.get("date")) for r in rows})
+        for row in rows:
+            if not row.get("date") or not row.get("secid"):
+                continue
+            payload.append(
+                (
+                    str(row["date"]),
+                    int(row.get("tier") or 1),
+                    str(row["secid"]),
+                    str(row.get("code") or ""),
+                    str(row.get("name") or ""),
+                    str(row.get("reason") or ""),
+                    str(row.get("source") or "summary"),
+                    stamp,
+                )
+            )
+        for date in dates:
+            self.conn.execute(
+                "DELETE FROM tier_picks WHERE date = ? AND source != 'manual'", (date,)
+            )
+        if payload:
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO tier_picks "
+                "(date, tier, secid, code, name, reason, source, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                payload,
+            )
+        self.conn.commit()
+        self.bump_data_version()
+        return len(payload)
+
+    def load_tier_picks(self, dates: Optional[Sequence[str]] = None) -> pd.DataFrame:
+        """读梯队名单（``dates`` 为空=全部），按日期、梯队排好序。"""
+        sql = (
+            "SELECT date, tier, secid, code, name, reason, source, created_at "
+            "FROM tier_picks"
+        )
+        params: List[Any] = []
+        if dates:
+            placeholders = ",".join("?" for _ in dates)
+            sql += f" WHERE date IN ({placeholders})"
+            params.extend([str(d) for d in dates])
+        sql += " ORDER BY date DESC, tier ASC, secid ASC"
+        return pd.read_sql_query(sql, self.conn, params=params)
+
+    def tier_dates(self, limit: Optional[int] = None) -> List[str]:
+        """有梯队名单的交易日（降序）。"""
+        sql = "SELECT DISTINCT date FROM tier_picks ORDER BY date DESC"
+        params: List[Any] = []
+        if limit:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        return [str(r["date"]) for r in self.conn.execute(sql, params).fetchall()]
+
+    def all_trading_days(self) -> List[str]:
+        """本地全部交易日（升序）——回测算"T+N 个交易日"要用它当标尺。"""
+        rows = self.conn.execute("SELECT date FROM trading_days ORDER BY date ASC").fetchall()
+        return [str(r["date"]) for r in rows]
 
     # ------------------------------------------------------ 每日信号缓存（宽表）
     def upsert_daily_signals(self, rows: Iterable[Dict[str, Any]]) -> int:

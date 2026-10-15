@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -716,6 +717,109 @@ def cmd_industry(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tiers(cfg: Config, args: argparse.Namespace) -> int:
+    """复盘梯队（第一/第二梯队）跟踪回测：解析名单 + 算 1/5/10/20 交易日表现。
+
+    ``--sync`` 先从历史复盘正文里把梯队名单解析进库（老格式也能兜底解析），
+    然后按 ``backtest.entry``（默认 T+1 开盘买入）算收益、超额、期间最大涨跌。
+    """
+    from .backtest import entry_mode, report, sync_tier_picks
+
+    store = open_store(cfg)
+    if getattr(args, "sync", False):
+        stats = sync_tier_picks(store, cfg, force=bool(getattr(args, "force", False)))
+        log.info(
+            "梯队名单同步：%s 个交易日 · 第一梯队 %s 只 / 第二梯队 %s 只"
+            "（跳过 %s 天：已解析或无复盘）",
+            stats["dates"],
+            stats["tier1"],
+            stats["tier2"],
+            stats["skipped"],
+        )
+    days = getattr(args, "days", None) or int(cfg.get("backtest.days", 90) or 90)
+    result = report(store, cfg, days=days)
+    store.close()
+
+    if getattr(args, "json", False):
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    if not result["rows"]:
+        print(
+            "还没有梯队名单。复盘生成后会自动解析；老复盘可以补："
+            "`python3 -m emscan tiers --sync`"
+        )
+        return 0
+    print(_tiers_text(result, entry_mode(cfg)))
+    out = getattr(args, "out", None)
+    if out:
+        path = Path(out)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(result["rows"]).to_csv(path, index=False, encoding="utf-8-sig")
+        print(f"\n已写出：{path}")
+    return 0
+
+
+def _tiers_text(result: Dict[str, Any], entry: str) -> str:
+    """把回测结果排成命令行表格（梯队汇总 + 按日期 + 个股明细）。"""
+    horizons = [str(h) for h in result.get("horizons") or []]
+    lines: List[str] = []
+    entry_cn = "T+1 开盘买入" if entry == "next_open" else "T 日收盘买入"
+    lines.append(f"复盘梯队跟踪回测（{entry_cn} · 持有 1/{'/'.join(horizons[1:])} 交易日 · 对比全市场等权）")
+    lines.append("")
+    lines.append("按梯队汇总（累计所有名单日）")
+    header = f"{'梯队':<10}{'样本':>5}{'完成':>5}"
+    for h in horizons:
+        header += f"{'均' + h + '日':>10}{'胜率':>8}{'超额':>9}"
+    lines.append(header)
+    for key, item in (result.get("by_tier") or {}).items():
+        row = f"{item['label']:<10}{item['picks']:>5}{item['finished']:>5}"
+        for h in horizons:
+            stats = item.get(h) or {}
+            if not stats.get("n"):
+                row += f"{'-':>10}{'-':>8}{'-':>9}"
+                continue
+            row += f"{stats['avg'] * 100:>9.2f}%{stats['win_rate'] * 100:>7.0f}%"
+            excess = stats.get("avg_excess")
+            row += f"{(excess * 100 if excess is not None else float('nan')):>8.2f}%"
+        lines.append(row)
+    lines.append("")
+    lines.append("按名单日（最近在前）")
+    header = f"{'日期':<12}{'梯队':<10}{'只数':>5}"
+    for h in horizons:
+        header += f"{h + '日':>9}"
+    lines.append(header + f"{'状态':>8}")
+    for item in result.get("by_date") or []:
+        row = f"{item['date']:<12}{item['tier_label']:<10}{item['picks']:>5}"
+        for h in horizons:
+            value = (item.get("avg") or {}).get(h)
+            row += f"{(value * 100 if value is not None else float('nan')):>8.2f}%"
+        lines.append(row + f"{item['status']:>8}")
+    lines.append("")
+    lines.append("个股明细（跟踪中=持有期还没走完）")
+    header = f"{'日期':<12}{'梯队':<8}{'代码':<9}{'名称':<10}{'入场':>8}"
+    for h in horizons:
+        header += f"{h + '日':>9}"
+    lines.append(header + f"{'最大涨':>9}{'最大回撤':>10}{'状态':>7}")
+    for row in result["rows"]:
+        line = (
+            f"{row['date']:<12}{row['tier_label']:<8}{str(row['code']):<9}"
+            f"{str(row['name'])[:8]:<10}"
+            f"{(row['entry'] if row['entry'] is not None else float('nan')):>8.2f}"
+        )
+        for h in horizons:
+            value = row["rets"].get(int(h))
+            line += f"{(value * 100 if value is not None else float('nan')):>8.2f}%"
+        line += f"{(row['max_gain'] * 100 if row['max_gain'] is not None else float('nan')):>8.1f}%"
+        line += f"{(row['max_drawdown'] * 100 if row['max_drawdown'] is not None else float('nan')):>9.1f}%"
+        lines.append(line + f"{row['status']:>7}")
+    if result.get("unmatched"):
+        lines.append("")
+        lines.append("对不上本地股票的条目（AI 写错代码/名称，或已退市）：")
+        for item in result["unmatched"][:10]:
+            lines.append(f"- {item.get('date')} 第{item.get('tier')}梯队 {item.get('code')} {item.get('name')}")
+    return "\n".join(lines)
+
+
 def cmd_doji(cfg: Config, args: argparse.Namespace) -> int:
     """筛"低位缩量十字星"（超跌企稳观察信号），并写进每日信号缓存。"""
     store = open_store(cfg)
@@ -1236,6 +1340,15 @@ def cmd_check(cfg: Config, args: argparse.Namespace) -> int:
     _print_request_budget(cfg, info)
     print(f"  信号规则：{', '.join(normalize_rules(cfg.get('signals.rules')))}")
     print(f"  行业/概念归属：{describe_tags(store)}")
+    tier_dates = store.tier_dates()
+    if tier_dates:
+        picks = store.load_tier_picks()
+        print(
+            f"  梯队回测：{len(tier_dates)} 个名单日 / {len(picks)} 条记录"
+            f"（最近 {tier_dates[0]}，查：python3 -m emscan tiers）"
+        )
+    else:
+        print("  梯队回测：还没有名单（复盘生成后自动解析；老复盘补跑 python3 -m emscan tiers --sync）")
     key = str(cfg.get("summary.api_key") or "")
     env_name = str(cfg.get("summary.api_key_env", "DEEPSEEK_API_KEY"))
     where = "环境变量/环境文件" if os.environ.get(env_name) else ("config.yaml" if key else "")
@@ -1360,6 +1473,7 @@ def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
             vol_up_min_pct=vol_up_min_pct,
             view_help=build_view_help(cfg),
             summary_after_cfg=summary_after(cfg),
+            backtest_cfg=cfg,  # 梯队回测页要用 backtest.*（入场价/持有期/默认天数）
         )
     except OSError as exc:
         log.error("端口 %s 起不来（%s）：换一个 --port，或先关掉占用的进程", port, exc)
@@ -1426,6 +1540,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="要同步的类别：sw(申万一级),sw2(申万二级),hangye(证监会行业),gn(概念板块),"
         "chgn(热门概念),diyu(地域)",
     )
+
+    p_tier = sub.add_parser("tiers", help="复盘梯队（第一/第二梯队）跟踪回测")
+    p_tier.add_argument(
+        "--sync", action="store_true", help="先从历史复盘正文里解析梯队名单，再出报表"
+    )
+    p_tier.add_argument("--force", action="store_true", help="解析时覆盖已有名单（手工加的不动）")
+    p_tier.add_argument("--days", type=int, help="只看最近 N 个名单日（默认 backtest.days）")
+    p_tier.add_argument("--json", action="store_true", help="输出 JSON（给脚本/看板用）")
+    p_tier.add_argument("--out", help="把明细另存为 CSV（utf-8-sig）")
 
     p_sum = sub.add_parser("summary", help="生成当日复盘总结（DeepSeek 或规则版）")
     p_sum.add_argument("--trade-date", dest="trade_date", help="交易日 YYYY-MM-DD（默认最新）")
@@ -1518,6 +1641,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "box": cmd_box,
         "doji": cmd_doji,
         "industry": cmd_industry,
+        "tiers": cmd_tiers,
         "summary": cmd_summary,
         "signals": cmd_signals,
         "hits": cmd_hits,

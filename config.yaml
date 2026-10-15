@@ -115,3 +115,12 @@ mairui:
 #   reasoning_effort: high     # none / low / high / max（none=关思考；max 预算更大更慢）
 #   max_tokens: 32000          # 生成上限（官方允许 1~393216）；思考 token 也算在里面，填 0=用官方默认
 #   api_key: ""                # 建议用环境变量，不要写进 git
+
+# 复盘梯队（第一/第二梯队）与跟踪回测：复盘文末固定输出 TIER1/TIER2 两行，程序解析后跟踪
+# tiers:
+#   max_tier1: 8        # 提示词里写给 AI 的上限（第一梯队 3~8 只，宁少而精）
+#   max_tier2: 15
+# backtest:
+#   entry: next_open    # next_open=T+1 开盘买入（默认，复盘收盘后才生成）；close=T 日收盘买入
+#   horizons: [1, 5, 10, 20]   # 持有交易日
+#   days: 90            # 网页/命令行默认看最近多少个名单日
