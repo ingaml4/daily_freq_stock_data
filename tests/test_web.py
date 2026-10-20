@@ -549,6 +549,8 @@ def test_top_tabs_and_signal_subtabs(tmp_path):
     assert 'aria-current="page">梯队回测</a>' in tiers
     assert '<div class="page"><div class="toolbar">工具条</div></div>' in tiers
     assert '<main class="page">' in tiers and '<footer class="page">' in tiers
+    # 一级标签已经承担导航，回测工具条里不再重复放"返回信号页"
+    assert "← 信号页" not in tiers
     # 三页统一字体：正文 14px/1.7，页面标题 20px，Markdown 标题层级统一
     for html_page in (page, summary, tiers):
         assert "font:14px/1.7" in html_page

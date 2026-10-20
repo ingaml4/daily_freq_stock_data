@@ -1559,7 +1559,7 @@ def render_tiers_page(
         else:
             day_links.append(f'<a href="/tiers?days={value}">{html.escape(label)}</a>')
     toolbar = (
-        '<div class="toolbar"><a href="/">← 信号页</a>'
+        '<div class="toolbar">'
         + "".join(day_links)
         + f'<a href="/tiers.csv?days={days}" download>下载 CSV</a>'
         + f'<a href="/api/tiers?days={days}">JSON</a></div>'
