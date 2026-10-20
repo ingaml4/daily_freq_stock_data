@@ -543,11 +543,17 @@ def test_top_tabs_and_signal_subtabs(tmp_path):
     assert 'aria-current="page">当日总结</a>' in summary
     assert '<div class="page">' in summary
 
-    tiers = _tiers_page_shell("测试", "", "")
+    tiers = _tiers_page_shell("测试", '<div class="toolbar">工具条</div>', "")
     assert '<nav class="tabs top-tabs">' in tiers
     assert '<nav class="tabs sub-tabs">' not in tiers
     assert 'aria-current="page">梯队回测</a>' in tiers
+    assert '<div class="page"><div class="toolbar">工具条</div></div>' in tiers
     assert '<main class="page">' in tiers and '<footer class="page">' in tiers
+    # 三页统一字体：正文 14px/1.7，页面标题 20px，Markdown 标题层级统一
+    for html_page in (page, summary, tiers):
+        assert "font:14px/1.7" in html_page
+        assert ".top h1,header h1{font-size:20px" in html_page
+    assert ".md h2{font-size:18px}" in summary
 
 
 def test_serve_accepts_all_cli_options(tmp_path):

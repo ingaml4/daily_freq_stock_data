@@ -283,6 +283,16 @@ TABS_CSS = """\
 # 三个页面共用的页面容器：统一左右边距与最大宽度（表格页与阅读页同一左边缘）
 LAYOUT_CSS = """\
 .page{max-width:1400px;margin:0 auto;padding-left:16px;padding-right:16px}
+body{font:14px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC",
+  "Microsoft YaHei",Arial,sans-serif}
+.brand{font-size:20px;font-weight:700}
+.top h1,header h1{font-size:20px;font-weight:700}
+.hint{font-size:12px}
+.md{font-size:14px;line-height:1.75}
+.md h1{font-size:22px}
+.md h2{font-size:18px}
+.md h3{font-size:16px}
+.md h4{font-size:14px}
 """
 
 
@@ -1667,7 +1677,7 @@ def _tiers_page_shell(title: str, toolbar: str, body: str, _extra: str = "") -> 
     )
     return (
         head
-        + f'{toolbar}<main class="page">{body}</main>'
+        + f'<div class="page">{toolbar}</div><main class="page">{body}</main>'
         '<footer class="page">代码点击跳转雪球行情 · 收益均按交易日计算 · '
         "「跟踪中」表示持有期未走完，数字会随后续行情更新</footer>"
         "</body></html>"
