@@ -15,6 +15,7 @@ from emscan.mairui import BOARD_LABELS
 from emscan.web import (
     DEFAULT_VIEW,
     VIEWS,
+    _tiers_page_shell,
     _safe_next,
     build_context,
     check_password,
@@ -24,6 +25,7 @@ from emscan.web import (
     issue_session,
     normalize_sort,
     render_html,
+    render_summary_page,
     serve,
     xueqiu_url,
 )
@@ -341,7 +343,7 @@ def test_render_html_has_nav_sortable_headers_and_xueqiu_links(tmp_path):
     ctx = build_context(store, view="vol_spike", date=date)
     page = render_html(ctx, title="A股日频信号")
     store.close()
-    # 四个导航按钮
+    # 信号页的二级标签（所有视图）都在
     for spec in VIEWS.values():
         assert spec["nav"] in page
     assert 'class="active"' in page
@@ -505,7 +507,7 @@ def test_each_view_has_its_own_columns(tmp_path):
 
 
 def test_summary_buttons_and_text_extraction(tmp_path):
-    """网页要有"当日总结/下载总结"入口；AI 返回结构变化时也能取到正文。"""
+    """一级导航要有当日总结/梯队回测；下载入口在总结页上。"""
     from emscan.summary import extract_text
 
     assert extract_text({"choices": [{"message": {"content": "A"}}]}) == "A"
@@ -515,7 +517,34 @@ def test_summary_buttons_and_text_extraction(tmp_path):
     _, store, date = _seed(tmp_path)
     page = render_html(build_context(store, view="vol_spike"))
     store.close()
-    assert "当日总结" in page and "下载总结" in page and "/summary.md" in page
+    assert "当日总结" in page and "梯队回测" in page
+    summary = render_summary_page(
+        {"date": date, "engine": "rule", "content": "## 标题\n\n正文"}
+    )
+    assert "下载 Markdown" in summary and "/summary.md" in summary
+
+
+def test_top_tabs_and_signal_subtabs(tmp_path):
+    """一级标签：信号/当日总结/梯队回测；信号视图只作为信号页的二级标签。"""
+    _, store, date = _seed(tmp_path)
+    page = render_html(build_context(store, view="vol_spike", date=date))
+    store.close()
+    assert '<nav class="tabs top-tabs">' in page
+    assert 'aria-current="page">信号</a>' in page
+    assert 'href="/summary"' in page and 'href="/tiers"' in page
+    assert '<nav class="tabs sub-tabs">' in page
+    for spec in VIEWS.values():
+        assert spec["nav"] in page
+
+    summary = render_summary_page({"date": date, "engine": "rule", "content": "## 标题\n正文"})
+    assert '<nav class="tabs top-tabs">' in summary
+    assert '<nav class="tabs sub-tabs">' not in summary
+    assert 'aria-current="page">当日总结</a>' in summary
+
+    tiers = _tiers_page_shell("测试", "", "")
+    assert '<nav class="tabs top-tabs">' in tiers
+    assert '<nav class="tabs sub-tabs">' not in tiers
+    assert 'aria-current="page">梯队回测</a>' in tiers
 
 
 def test_serve_accepts_all_cli_options(tmp_path):

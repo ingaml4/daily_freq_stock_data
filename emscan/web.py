@@ -260,6 +260,55 @@ VIEWS: Dict[str, Dict[str, str]] = {
 
 DEFAULT_VIEW = "vol_spike"
 
+# 一级导航：信号（含所有二级视图）/ 当日总结 / 梯队回测
+TOP_TABS = (
+    ("signals", "信号", "/"),
+    ("summary", "当日总结", "/summary"),
+    ("tiers", "梯队回测", "/tiers"),
+)
+
+TABS_CSS = """\
+.tabs{display:flex;gap:8px;overflow-x:auto;padding:2px 0;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tabs a{flex:0 0 auto;text-decoration:none;border-radius:999px;
+  border:1px solid #2a3442;background:#171a21;color:#9fb3c8;
+  padding:7px 14px;font-size:14px;white-space:nowrap}
+.tabs a:hover{color:#fff;border-color:#3a4a60}
+.tabs a.active{background:#4aa8ff;border-color:#4aa8ff;color:#08121d;font-weight:700}
+.top-tabs{margin:0 0 2px;width:100%}
+.sub-tabs{margin-top:10px}
+.sub-tabs a{padding:5px 12px;font-size:13px}
+"""
+
+
+def render_top_tabs(active: str) -> str:
+    """一级导航：信号 / 当日总结 / 梯队回测。"""
+    links = []
+    for key, label, href in TOP_TABS:
+        is_active = key == active
+        cls = ' class="active"' if is_active else ""
+        current = ' aria-current="page"' if is_active else ""
+        links.append(f'<a{cls} href="{href}"{current}>{label}</a>')
+    return '<nav class="tabs top-tabs">' + "".join(links) + "</nav>"
+
+
+def render_view_tabs(
+    view: str, date: str = "", help_map: Optional[Dict[str, str]] = None
+) -> str:
+    """信号页的二级标签：六个信号视图（放量/金叉/布林/反转/箱体）。"""
+    help_map = help_map or {}
+    links = []
+    for key, spec in VIEWS.items():
+        cls = ' class="active"' if key == view else ""
+        tip = plain_help(help_map.get(key, ""))
+        tip_attr = f' title="{html.escape(tip, quote=True)}"' if tip else ""
+        href = f"/signals/{key}"
+        if date:
+            href += "?date=" + quote(str(date))
+        links.append(f'<a{cls} href="{href}"{tip_attr}>{html.escape(spec["nav"])}</a>')
+    return '<nav class="tabs sub-tabs">' + "".join(links) + "</nav>"
+
+
 # 每个按钮的表格列：基础信息 + 该按钮相关的指标（不再所有视图共用一张大表）
 BASE_COLUMNS = ("code", "name", "board", "industry", "close", "pct_chg", "amount_yi", "turnover")
 VIEW_COLUMNS: Dict[str, tuple] = {
@@ -1145,15 +1194,8 @@ def render_html(
 ) -> str:
     """把一页渲染成完整 HTML（服务端渲染，手机/桌面同一份）。"""
     help_map = help_map or {}
-    nav = []
-    for key, spec in VIEWS.items():
-        active = ' class="active"' if key == ctx.view else ""
-        tip = plain_help(help_map.get(key, ""))
-        tip_attr = (' title="%s"' % html.escape(tip, quote=True)) if tip else ""
-        nav.append(
-            f'<a{active} href="/signals/{key}?date={html.escape(ctx.date or "")}"{tip_attr}>'
-            f'{html.escape(spec["nav"])}</a>'
-        )
+    top_nav = render_top_tabs("signals")
+    sub_nav = render_view_tabs(ctx.view, ctx.date or "", help_map)
 
     view_columns = VIEW_COLUMNS.get(ctx.view) or tuple(k for k, _, _, _ in COLUMNS)
     # 没有同步过行业归属（emscan industry）时不显示空的"行业"列
@@ -1259,21 +1301,19 @@ def render_html(
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)} · {html.escape(ctx.title or "")}</title>
-<style>{CSS}</style></head>
+<style>{CSS}{TABS_CSS}</style></head>
 <body>
 <header>
   <div class="brand">{html.escape(title)}<span>{html.escape(ctx.title or "")}</span>
     {('<details class="dd help"><summary title="筛选口径">筛选口径 ?</summary>'
       f'<div class="dd-body">{help_text}</div></details>') if help_text else ""}
     {('<a class="logout" href="/logout">退出登录</a>') if show_logout else ""}</div>
-  <nav>{"".join(nav)}</nav>
+  {top_nav}
+  {sub_nav}
   <form class="toolbar" method="get" action="/signals/{ctx.view}">
     <input name="q" value="{html.escape(ctx.query)}" placeholder="代码/名称" size="10">
     <button type="submit">查询</button>
     <a class="refresh" href="/signals/{ctx.view}">刷新</a>
-    <a class="refresh" href="/summary" title="收盘后（17:00 之后）自动生成的当日复盘">当日总结</a>
-    <a class="refresh" href="/summary.md" download title="下载 Markdown">下载总结</a>
-    <a class="refresh" href="/tiers" title="复盘第一/第二梯队的 1/5/10/20 交易日跟踪回测">梯队回测</a>
     {board_filter}
   </form>
 </header>
@@ -1363,8 +1403,12 @@ body{
   border:1px solid #2a3f5a;background:#16202e;color:#7cc4ff;
   font-size:12px;vertical-align:middle;
 }
-nav a{color:#9fb3c8;text-decoration:none;margin-left:16px;font-size:14px}
-nav a:hover{color:#fff}
+.actions a{
+  display:inline-block;padding:6px 12px;border-radius:999px;
+  border:1px solid #2a3f5a;background:#16202e;color:#7cc4ff;
+  font-size:13px;text-decoration:none;
+}
+.actions a:hover{color:#fff}
 .md{overflow-wrap:anywhere}
 .md h1,.md h2,.md h3,.md h4{
   line-height:1.4;margin:1.7em 0 .6em;font-weight:600;
@@ -1411,7 +1455,6 @@ footer{
 @media(max-width:640px){
   .wrap{padding:14px 14px 48px}
   .top h1{font-size:18px}
-  nav a{margin:0 12px 0 0}
   .md h2{font-size:18px}
   .md table{font-size:12px}
 }
@@ -1427,11 +1470,13 @@ def render_summary_page(record: Dict[str, Any]) -> str:
     head = (
         '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<title>{date} 当日总结</title><style>{_SUMMARY_CSS}</style></head><body>"
+        f"<title>{date} 当日总结</title>"
+        f"<style>{_SUMMARY_CSS}{TABS_CSS}</style></head><body>"
         '<div class="wrap"><header class="top">'
         f"<h1>{date} 当日总结{badge}</h1>"
-        '<nav><a href="/">← 返回</a><a href="/summary.md">下载 Markdown</a>'
-        '<a href="/tiers">梯队回测</a></nav></header>'
+        '<div class="actions"><a href="/summary.md" download>下载 Markdown</a></div>'
+        + render_top_tabs("summary")
+        + "</header>"
     )
     return (
         head
@@ -1447,10 +1492,12 @@ def render_summary_notice(message: str) -> str:
     return (
         '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<title>当日总结</title><style>{_SUMMARY_CSS}</style></head><body>"
+        f"<title>当日总结</title>"
+        f"<style>{_SUMMARY_CSS}{TABS_CSS}</style></head><body>"
         '<div class="wrap"><header class="top"><h1>当日总结</h1>'
-        '<nav><a href="/">← 返回</a><a href="/tiers">梯队回测</a></nav></header>'
-        f'<div class="notice">{text}</div></div></body></html>'
+        + render_top_tabs("summary")
+        + "</header>"
+        + f'<div class="notice">{text}</div></div></body></html>'
     )
 
 
@@ -1601,13 +1648,19 @@ def render_tiers_page(
 
 
 def _tiers_page_shell(title: str, toolbar: str, body: str, _extra: str = "") -> str:
-    return (
+    head = (
         "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<title>梯队回测 · {html.escape(title)}</title><style>{TIERS_CSS}</style></head><body>"
+        f"<title>梯队回测 · {html.escape(title)}</title>"
+        f"<style>{TIERS_CSS}{TABS_CSS}</style></head><body>"
         f"<header><h1>梯队回测（复盘第一/第二梯队跟踪）</h1>"
-        f'<div class="hint">数据来自每份复盘文末的 TIER1/TIER2 名单 + 本地日线行情</div></header>'
-        f"{toolbar}<main>{body}</main>"
+        + render_top_tabs("tiers")
+        + '<div class="hint">数据来自每份复盘文末的 TIER1/TIER2 名单 + 本地日线行情</div>'
+        + "</header>"
+    )
+    return (
+        head
+        + f"{toolbar}<main>{body}</main>"
         "<footer>代码点击跳转雪球行情 · 收益均按交易日计算 · "
         "「跟踪中」表示持有期未走完，数字会随后续行情更新</footer>"
         "</body></html>"
