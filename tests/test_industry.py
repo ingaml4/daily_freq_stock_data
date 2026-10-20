@@ -177,7 +177,9 @@ def test_digest_reports_industry_distribution(tmp_path):
     text = summary_mod.rule_summary(digest)
     assert "行业分布（申万一级行业）" in text and "电子 2只" in text
     # 没有行业归属的股票算"未分类"，不能静默丢掉
-    digest_missing = build_digest(StoreStub(), make_cfg(tmp_path, {"industry": {"kinds": ["gn"]}}), "2026-10-14")
+    digest_missing = build_digest(
+        StoreStub(), make_cfg(tmp_path, {"industry": {"kinds": ["gn"]}}), "2026-10-14"
+    )
     assert "行业分布" not in digest_missing or digest_missing["行业分布"] == {}
 
 

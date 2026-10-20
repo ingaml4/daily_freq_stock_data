@@ -32,12 +32,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 
 from .box import scan_box
-from .summary import generate_summary, is_due as summary_is_due, mode_text as summary_mode_text, summary_after
+from .config import Config
+from .demo import synthesize
 from .doji import compute_reversal_features, doji_params
 from .industry import describe as describe_tags
 from .industry import display_map as industry_map
-from .config import Config
-from .demo import synthesize
 from .mairui import (
     MairuiClient,
     MairuiError,
@@ -70,6 +69,14 @@ from .signals import (
     normalize_rules,
 )
 from .store import Store
+from .summary import (
+    generate_summary,
+)
+from .summary import is_due as summary_is_due
+from .summary import mode_text as summary_mode_text
+from .summary import (
+    summary_after,
+)
 from .tzutil import describe, ensure_env_tz, now_hm, shift
 from .tzutil import today as tz_today
 
@@ -764,7 +771,9 @@ def _tiers_text(result: Dict[str, Any], entry: str) -> str:
     horizons = [str(h) for h in result.get("horizons") or []]
     lines: List[str] = []
     entry_cn = "T+1 开盘买入" if entry == "next_open" else "T 日收盘买入"
-    lines.append(f"复盘梯队跟踪回测（{entry_cn} · 持有 1/{'/'.join(horizons[1:])} 交易日 · 对比全市场等权）")
+    lines.append(
+        f"复盘梯队跟踪回测（{entry_cn} · 持有 1/{'/'.join(horizons[1:])} 交易日 · 对比全市场等权）"
+    )
     lines.append("")
     lines.append("按梯队汇总（累计所有名单日）")
     header = f"{'梯队':<10}{'样本':>5}{'完成':>5}"
@@ -810,13 +819,16 @@ def _tiers_text(result: Dict[str, Any], entry: str) -> str:
             value = row["rets"].get(int(h))
             line += f"{(value * 100 if value is not None else float('nan')):>8.2f}%"
         line += f"{(row['max_gain'] * 100 if row['max_gain'] is not None else float('nan')):>8.1f}%"
-        line += f"{(row['max_drawdown'] * 100 if row['max_drawdown'] is not None else float('nan')):>9.1f}%"
+        drawdown = row["max_drawdown"] * 100 if row["max_drawdown"] is not None else float("nan")
+        line += f"{drawdown:>9.1f}%"
         lines.append(line + f"{row['status']:>7}")
     if result.get("unmatched"):
         lines.append("")
         lines.append("对不上本地股票的条目（AI 写错代码/名称，或已退市）：")
         for item in result["unmatched"][:10]:
-            lines.append(f"- {item.get('date')} 第{item.get('tier')}梯队 {item.get('code')} {item.get('name')}")
+            lines.append(
+                f"- {item.get('date')} 第{item.get('tier')}梯队 {item.get('code')} {item.get('name')}"
+            )
     return "\n".join(lines)
 
 
@@ -943,8 +955,14 @@ def cmd_summary(cfg: Config, args: argparse.Namespace) -> int:
     record = generate_summary(
         store, cfg, trade_date, api_key=api_key, force=bool(getattr(args, "force", False))
     )
+    if record.get("pending"):
+        log.warning("总结本次未生成：%s", record.get("reason"))
+        store.record_run("summary", trade_date=trade_date, note=f"pending: {record.get('reason')}")
+        store.close()
+        return 0
     log.info(
-        "总结已生成：交易日 %s · 引擎 %s · %s 字",
+        "总结已%s：交易日 %s · 引擎 %s · %s 字",
+        "复用（数据未变）" if record.get("reused") else "生成",
         trade_date,
         record.get("engine"),
         len(str(record.get("content") or "")),
@@ -1111,9 +1129,7 @@ def cmd_hits(cfg: Config, args: argparse.Namespace) -> int:
     if rule_text:
         prefix = "任一命中" if any_of else "同时命中"
         summary += f"；筛选条件：{prefix} {rule_text}"
-    table = render_table(
-        frame, columns=columns, float_formats=HITS_FORMATS, labels=labels
-    )
+    table = render_table(frame, columns=columns, float_formats=HITS_FORMATS, labels=labels)
     print(f"{summary}\n\n{table}")
 
     out = getattr(args, "out", None)
@@ -1196,7 +1212,16 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
     if not stats.trade_date:
         log.info("今天没有可扫描的行情（%s），跳过扫描与信号", stats.skipped or "无当日数据")
         return 0
+    return _post_sync(cfg, args, stats, 0)
 
+
+def _post_sync(cfg: Config, args: argparse.Namespace, stats, rc: int = 0) -> int:
+    """同步之后的步骤：扫描 → 箱体 → 十字星 → 指标信号 → 最后出总结。
+
+    顺序很重要：总结读的是 ``daily_signals`` 缓存，而 MACD/KDJ/布林信号由
+    ``cmd_signals`` 写入。总结如果先跑，就会生成"MACD/KDJ/布林 0 只"的假复盘，
+    而且会被 ``daily_summary`` 缓存下来（网页随后有数据，总结却一直是 0）。
+    """
     args.trade_date = stats.trade_date
     rc = cmd_scan(cfg, args)
     if bool(cfg.get("box.enabled", True)):
@@ -1211,20 +1236,22 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
         except Exception as exc:
             log.error("十字星筛选失败：%s", exc)
             log.debug("详细堆栈", exc_info=True)
-    if bool(cfg.get("summary.enabled", True)) and summary_is_due(cfg):
-        try:
-            args2 = argparse.Namespace(**vars(args))
-            args2.api_key = None
-            args2.force = False
-            args2.force_rule = False
-            rc = max(rc, cmd_summary(cfg, args2))
-        except Exception as exc:
-            log.error("生成当日总结失败：%s", exc)
+    # 指标信号必须先于总结：它负责把当天的 MACD/KDJ/布林标记写进缓存
     if _signals_enabled(cfg, args):
         try:
             rc = max(rc, cmd_signals(cfg, args))
         except Exception as exc:  # 信号失败不影响放量报告
             log.error("指标信号筛选失败：%s", exc)
+            log.debug("详细堆栈", exc_info=True)
+    if bool(cfg.get("summary.enabled", True)) and summary_is_due(cfg):
+        try:
+            args2 = argparse.Namespace(**vars(args))
+            args2.api_key = None
+            args2.force = bool(getattr(args, "force", False))
+            args2.force_rule = False
+            rc = max(rc, cmd_summary(cfg, args2))
+        except Exception as exc:
+            log.error("生成当日总结失败：%s", exc)
             log.debug("详细堆栈", exc_info=True)
     return rc
 
@@ -1348,7 +1375,9 @@ def cmd_check(cfg: Config, args: argparse.Namespace) -> int:
             f"（最近 {tier_dates[0]}，查：python3 -m emscan tiers）"
         )
     else:
-        print("  梯队回测：还没有名单（复盘生成后自动解析；老复盘补跑 python3 -m emscan tiers --sync）")
+        print(
+            "  梯队回测：还没有名单（复盘生成后自动解析；老复盘补跑 python3 -m emscan tiers --sync）"
+        )
     key = str(cfg.get("summary.api_key") or "")
     env_name = str(cfg.get("summary.api_key_env", "DEEPSEEK_API_KEY"))
     where = "环境变量/环境文件" if os.environ.get(env_name) else ("config.yaml" if key else "")

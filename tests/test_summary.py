@@ -16,6 +16,7 @@ from emscan.summary import (
     call_deepseek,
     extract_reasoning,
     extract_text,
+    generate_summary,
     mode_text,
 )
 
@@ -116,7 +117,10 @@ def test_call_deepseek_keeps_partial_when_retry_is_empty(tmp_path, monkeypatch):
     """重试也没正文时，不要丢掉已经拿到的半截内容。"""
     cfg = make_cfg(tmp_path)
     seen = []
-    replies = [_payload(content="半截但有用", finish="length"), _payload(content="", finish="length")]
+    replies = [
+        _payload(content="半截但有用", finish="length"),
+        _payload(content="", finish="length"),
+    ]
 
     def fake_post(url, headers, body, timeout):
         seen.append(body)
@@ -335,3 +339,85 @@ def test_digest_for_store_keeps_lists_out_of_the_database(tmp_path):
     assert len(lean["views"]["放量大涨"]["代表"]) == 20
     assert lean["全市场简表"]["只数"] == 5000
     assert len(json.dumps(lean, ensure_ascii=False)) < 5000
+
+
+class _SummaryStore:
+    """最小化的 store 桩：只实现 generate_summary 用到的三个方法。"""
+
+    def __init__(self, state=None, existing=None):
+        self.state = state
+        self.existing = existing
+        self.saved = []
+
+    def signal_state(self, _date):
+        return self.state
+
+    def get_summary(self, _date):
+        return self.existing
+
+    def save_summary(self, record):
+        self.saved.append(record)
+        self.existing = dict(record)
+
+
+def test_generate_summary_waits_until_indicator_signals_are_cached(tmp_path):
+    """指标信号还没进缓存时不出总结：否则会落一份"MACD/KDJ/布林 0 只"的假复盘。"""
+    cfg = make_cfg(tmp_path)
+    store = _SummaryStore(state={"rows": 5200, "indicator_filled": 0, "fingerprint": "5200:0"})
+    record = generate_summary(store, cfg, "2026-10-19")
+    assert record["pending"] is True
+    assert "指标" in record["reason"]
+    assert store.saved == []
+
+
+def test_generate_summary_rebuilds_when_signal_fingerprint_changes(tmp_path, monkeypatch):
+    """数据没变就复用；命中数变了（指纹变化）自动重算，旧缓存不会一直骗人。"""
+    cfg = make_cfg(tmp_path)
+    store = _SummaryStore(state={"rows": 10, "indicator_filled": 10, "fingerprint": "a:1"})
+    calls = {"n": 0}
+
+    def fake_digest(*_args, **_kwargs):
+        calls["n"] += 1
+        return {"date": "2026-10-19", "totals": {"MACD金叉": calls["n"]}}
+
+    monkeypatch.setattr(summary_mod, "build_digest", fake_digest)
+    first = generate_summary(store, cfg, "2026-10-19")
+    assert calls["n"] == 1 and len(store.saved) == 1
+
+    again = generate_summary(store, cfg, "2026-10-19")
+    assert again["content"] == first["content"]
+    assert calls["n"] == 1 and len(store.saved) == 1  # 指纹没变 → 不重算
+
+    store.state = {"rows": 10, "indicator_filled": 10, "fingerprint": "a:9"}
+    third = generate_summary(store, cfg, "2026-10-19")
+    assert calls["n"] == 2 and len(store.saved) == 2
+    assert third["content"] != first["content"]
+
+
+def test_generate_summary_rebuilds_legacy_record_without_fingerprint(tmp_path, monkeypatch):
+    """旧版落库的总结没有指纹：下一次运行会自动重建，不用手动删库。"""
+    cfg = make_cfg(tmp_path)
+    legacy = {
+        "date": "2026-10-19",
+        "engine": "deepseek-flash",
+        "content": "旧总结（三个按钮 0 只）",
+        "digest": json.dumps({"totals": {"MACD金叉": 0}}, ensure_ascii=False),
+    }
+    store = _SummaryStore(
+        state={"rows": 10, "indicator_filled": 10, "fingerprint": "new"}, existing=legacy
+    )
+    monkeypatch.setattr(
+        summary_mod,
+        "build_digest",
+        lambda *_a, **_k: {"date": "2026-10-19", "totals": {"MACD金叉": 3}},
+    )
+    record = generate_summary(store, cfg, "2026-10-19")
+    assert record["content"] != legacy["content"]
+    assert "3" in record["content"]
+    assert json.loads(store.saved[0]["digest"])["_fingerprint"] == "new"
+
+
+def test_rule_summary_explains_missing_tiers():
+    """规则版没有梯队名单，要在正文里说清楚，别让人以为"没按上限"是程序漏了。"""
+    text = summary_mod.rule_summary({"date": "2026-10-19", "totals": {"放量大涨": 3}})
+    assert "梯队" in text and "未调用 AI" in text

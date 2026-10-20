@@ -580,7 +580,9 @@ class Store:
             "SELECT kind, COUNT(DISTINCT code) AS nodes, COUNT(DISTINCT secid) AS stocks "
             "FROM symbol_tags GROUP BY kind"
         ).fetchall()
-        return {str(r["kind"]): {"nodes": int(r["nodes"]), "stocks": int(r["stocks"])} for r in rows}
+        return {
+            str(r["kind"]): {"nodes": int(r["nodes"]), "stocks": int(r["stocks"])} for r in rows
+        }
 
     def get_meta(self, key: str) -> Optional[str]:
         row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (str(key),)).fetchone()
@@ -632,10 +634,7 @@ class Store:
 
     def load_tier_picks(self, dates: Optional[Sequence[str]] = None) -> pd.DataFrame:
         """读梯队名单（``dates`` 为空=全部），按日期、梯队排好序。"""
-        sql = (
-            "SELECT date, tier, secid, code, name, reason, source, created_at "
-            "FROM tier_picks"
-        )
+        sql = "SELECT date, tier, secid, code, name, reason, source, created_at " "FROM tier_picks"
         params: List[Any] = []
         if dates:
             placeholders = ",".join("?" for _ in dates)
@@ -1069,6 +1068,45 @@ class Store:
     def latest_signal_date(self) -> Optional[str]:
         row = self.conn.execute("SELECT MAX(date) AS d FROM daily_signals").fetchone()
         return row["d"] if row and row["d"] else None
+
+    def signal_state(self, date: str) -> Dict[str, Any]:
+        """当日信号缓存的"就绪度 + 指纹"，用于决定复盘能不能生成、要不要重算。
+
+        * ``rows``：当日缓存行数（放量/箱体等任一步骤写进来就算）
+        * ``indicator_filled``：有多少行的指标标记已经写入（NULL 表示 signals 步骤还没跑）
+        * ``fingerprint``：各视图命中数 + 行数的摘要，缓存内容变了它就会变
+        """
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS rows, "
+            " SUM(CASE WHEN s_macd_golden IS NOT NULL THEN 1 ELSE 0 END) AS indicator_filled, "
+            " SUM(COALESCE(s_vol_spike, 0)) AS vol_spike, "
+            " SUM(COALESCE(s_macd_golden, 0)) AS macd_golden, "
+            " SUM(COALESCE(s_kdj_golden, 0)) AS kdj_golden, "
+            " SUM(COALESCE(s_boll_break_lower, 0)) AS boll_break_lower, "
+            " SUM(COALESCE(s_boll_lower, 0)) AS boll_lower, "
+            " SUM(COALESCE(s_box_range, 0)) AS box_range, "
+            " SUM(COALESCE(s_reversal, 0)) AS reversal, "
+            " MAX(computed_at) AS last_write "
+            "FROM daily_signals WHERE date = ?",
+            (str(date),),
+        ).fetchone()
+        keys = (
+            "rows",
+            "indicator_filled",
+            "vol_spike",
+            "macd_golden",
+            "kdj_golden",
+            "boll_break_lower",
+            "boll_lower",
+            "box_range",
+            "reversal",
+        )
+        state: Dict[str, Any] = {key: int(row[key] or 0) for key in keys}
+        state["last_write"] = row["last_write"]
+        # 指纹刻意不含 last_write：同一天重复跑、数据没变时应当复用已有总结，
+        # 只有命中数/行数变了才需要重写（否则每次重跑都白花一次 AI 调用）。
+        state["fingerprint"] = ":".join(str(state[key]) for key in keys)
+        return state
 
     def indicator_stats(self) -> Dict[str, Any]:
         row = self.conn.execute(

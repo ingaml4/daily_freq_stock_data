@@ -14,7 +14,8 @@ CRON_TZ=Asia/Shanghai
 # 非交易日脚本会自己跳过（快照日期 != 今天，且交易日历会给出明确日志），退出码 0。
 15 17 * * 1-5 /home/jumpsrv/daily-freq-stock-data/scripts/daily_scan.sh
 
-# 只想每天跑一次？把它改成 17:15 那一行即可（15:32 那行删掉）：
+# 只想每天跑一次？只保留 17:15 这一行即可（15:32 那行删掉）：
+# 这轮会按"补行情 → 算指标 → 写信号 → 最后生成总结"的顺序自己完成全流程。
 #   15 17 * * 1-5 /home/jumpsrv/daily-freq-stock-data/scripts/daily_scan.sh
 
 # 可选：周末低峰期把"指标缺口"单独补一轮（限频低的证书很好用：慢跑不占用白天窗口）

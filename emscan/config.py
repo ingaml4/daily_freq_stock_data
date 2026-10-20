@@ -195,7 +195,8 @@ DEFAULTS: Dict[str, Any] = {
         "base_url": "https://api.deepseek.com",
         "model": "deepseek-flash",  # 或 deepseek-v4-pro（更强）；旧名 deepseek-chat 已过时
         "temperature": 0.3,  # 思考模式下不生效（官方文档），只有关掉思考才用它控制发散度
-        "max_tokens": 32000,  # 生成上限，官方允许 1~393216；**思考 token 也算在里面**。填 0 = 不传，用官方默认（思考 64K / 非思考 8K）
+        # 生成上限，官方允许 1~393216；**思考 token 也算在里面**。填 0 = 用官方默认
+        "max_tokens": 32000,
         # 复盘是综合判断（跨按钮找主线、辨消息面共振），默认开思考
         "thinking": True,  # 想更省/更快就设 false（等价于 reasoning_effort: none）
         "reasoning_effort": "high",  # none / low / high / max（none=关思考；max 预算更大、更慢）
@@ -205,6 +206,9 @@ DEFAULTS: Dict[str, Any] = {
         # true = 连"全市场简表"（缓存里所有股票的涨跌幅/成交额/换手/量比/命中标记）也喂给 AI
         # （上下文 1M，塞得下；prompt 会大很多，一般不需要）
         "include_universe": False,
+        # 指标信号没写进当日缓存时先不出总结（避免"网页有数据、总结却是 0 只"），
+        # 手动生成可加 --force 绕过
+        "require_indicators": True,
     },
     "web": {
         # 网页端：python3 -m emscan web

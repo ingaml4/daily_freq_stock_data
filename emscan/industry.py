@@ -149,5 +149,8 @@ def describe(store: Store) -> str:
     stats = store.symbol_tag_stats()
     if not stats:
         return "未同步（跑 `python3 -m emscan industry` 补齐行业/概念）"
-    parts = [f"{TAG_KINDS.get(k, k)} {v['nodes']} 个节点/{v['stocks']} 只" for k, v in sorted(stats.items())]
+    parts = [
+        f"{TAG_KINDS.get(k, k)} {v['nodes']} 个节点/{v['stocks']} 只"
+        for k, v in sorted(stats.items())
+    ]
     return " · ".join(parts) + f"（更新于 {store.get_meta(META_KEY) or '未知'}）"

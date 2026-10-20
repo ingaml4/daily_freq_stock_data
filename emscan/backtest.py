@@ -163,11 +163,16 @@ def parse_tiers_from_prose(content: str) -> Dict[int, List[Dict[str, str]]]:
     return out
 
 
-def parse_tiers(content: str, symbols: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def parse_tiers(
+    content: str,
+    symbols: Optional[Dict[str, Any]] = None,
+    limits: Optional[Dict[int, int]] = None,
+) -> Dict[str, Any]:
     """从复盘正文里取出两档名单，并校验成本地存在的股票。
 
     对不上的（AI 编的代码、名字写错、已退市）**不静默丢掉**，记在 ``unmatched`` 里，
-    回头据此改提示词。
+    回头据此改提示词。``limits`` 给定时按上限截断（提示词只是"要求"，这里才是硬约束），
+    被截掉的条数记在 ``truncated`` 里。
     """
     lines = parse_tier_lines(content)
     format_name = "tier-line"
@@ -208,7 +213,19 @@ def parse_tiers(content: str, symbols: Optional[Dict[str, Any]] = None) -> Dict[
                     "reason": str(item.get("reason") or "").strip(),
                 }
             )
-    return {"picks": picks, "unmatched": unmatched, "noise": noise, "format": format_name}
+    truncated = {1: 0, 2: 0}
+    for tier in (1, 2):
+        cap = int((limits or {}).get(tier) or 0)
+        if cap > 0 and len(picks[tier]) > cap:
+            truncated[tier] = len(picks[tier]) - cap
+            picks[tier] = picks[tier][:cap]
+    return {
+        "picks": picks,
+        "unmatched": unmatched,
+        "noise": noise,
+        "format": format_name,
+        "truncated": truncated,
+    }
 
 
 # ---------------------------------------------------------------- 落库 / 同步
@@ -225,7 +242,15 @@ def sync_tier_picks(
             for row in store.conn.execute("SELECT date FROM daily_summary ORDER BY date ASC")
         ]
     already = set(store.tier_dates())
-    stats: Dict[str, Any] = {"dates": 0, "tier1": 0, "tier2": 0, "unmatched": [], "skipped": 0}
+    limits = tier_limits(cfg)
+    stats: Dict[str, Any] = {
+        "dates": 0,
+        "tier1": 0,
+        "tier2": 0,
+        "unmatched": [],
+        "skipped": 0,
+        "truncated": {"tier1": 0, "tier2": 0},
+    }
     for date in targets:
         if date in already and not force:
             stats["skipped"] += 1
@@ -235,7 +260,19 @@ def sync_tier_picks(
         if not content:
             stats["skipped"] += 1
             continue
-        parsed = parse_tiers(content, index)
+        parsed = parse_tiers(content, index, limits=limits)
+        stats["truncated"]["tier1"] += parsed.get("truncated", {}).get(1, 0)
+        stats["truncated"]["tier2"] += parsed.get("truncated", {}).get(2, 0)
+        if any(parsed.get("truncated", {}).values()):
+            log.warning(
+                "%s 的梯队名单超出上限（第一梯队 ≤%s、第二梯队 ≤%s 只），已截断："
+                "第一梯队多 %s 只、第二梯队多 %s 只",
+                date,
+                limits[1],
+                limits[2],
+                parsed["truncated"][1],
+                parsed["truncated"][2],
+            )
         if parsed.get("noise"):
             log.debug("%s 的老格式复盘中忽略了 %s 条说明文字", date, parsed["noise"])
         rows: List[Dict[str, Any]] = []
@@ -243,6 +280,12 @@ def sync_tier_picks(
             for item in items:
                 rows.append({**item, "date": date, "source": "summary"})
         if not rows:
+            if "TIER" not in content.upper():
+                log.warning(
+                    "%s 的复盘没有 TIER1/TIER2 名单（提示词要求写在正文最后）；"
+                    "旧版总结或规则版总结会出现这种情况",
+                    date,
+                )
             stats["skipped"] += 1
             continue
         store.save_tier_picks(rows)
@@ -326,9 +369,7 @@ def evaluate(store: Store, cfg, picks: Optional[pd.DataFrame] = None) -> Dict[st
 
     _, industry = display_map(store, cfg)
     secids = [str(s) for s in frame["secid"].tolist()]
-    bars = store.load_bars(
-        secids=secids, columns=["secid", "date", "open", "high", "low", "close"]
-    )
+    bars = store.load_bars(secids=secids, columns=["secid", "date", "open", "high", "low", "close"])
     prices = _price_map(bars, secids)
 
     rows: List[Dict[str, Any]] = []
@@ -370,7 +411,9 @@ def evaluate(store: Store, cfg, picks: Optional[pd.DataFrame] = None) -> Dict[st
             rows.append(row)
             continue
         entry_date = days[entry_index]
-        entry_price = (series.get(entry_date) or {}).get("open" if entry == "next_open" else "close")
+        entry_price = (series.get(entry_date) or {}).get(
+            "open" if entry == "next_open" else "close"
+        )
         row["entry_date"] = entry_date
         row["entry"] = entry_price
         if not entry_price:
@@ -455,7 +498,9 @@ def _aggregate_by_tier(rows: List[Dict[str, Any]], horizons: Sequence[int]) -> D
             "finished": sum(1 for r in subset if r["status"] == "已完成"),
         }
         for horizon in horizons:
-            stats = _stats([r["rets"][horizon] for r in subset if r["rets"].get(horizon) is not None])
+            stats = _stats(
+                [r["rets"][horizon] for r in subset if r["rets"].get(horizon) is not None]
+            )
             excess = [r["excess"][horizon] for r in subset if r["excess"].get(horizon) is not None]
             if excess:
                 stats["avg_excess"] = round(sum(excess) / len(excess), 4)
@@ -489,7 +534,9 @@ def _aggregate_by_date(rows: List[Dict[str, Any]], horizons: Sequence[int]) -> L
                 rets = [r["rets"][horizon] for r in subset if r["rets"].get(horizon) is not None]
                 if rets:
                     item["avg"][str(horizon)] = round(sum(rets) / len(rets), 4)
-                excess = [r["excess"][horizon] for r in subset if r["excess"].get(horizon) is not None]
+                excess = [
+                    r["excess"][horizon] for r in subset if r["excess"].get(horizon) is not None
+                ]
                 if excess:
                     item["excess"][str(horizon)] = round(sum(excess) / len(excess), 4)
             out.append(item)

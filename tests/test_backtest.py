@@ -62,6 +62,38 @@ def test_parse_tiers_falls_back_to_prose(tmp_path):
     store.close()
 
 
+def test_parse_tiers_truncates_to_configured_limits(tmp_path):
+    """提示词只是要求：程序按 tiers.max_tier1/2 硬截断。"""
+    store = _store(tmp_path)
+    doc = (
+        "TIER1: 301591 肯特股份 | 603344 星德胜 | 000001 平安银行 | "
+        "600519 贵州茅台 | 301220 亚香股份\n"
+    )
+    parsed = bt.parse_tiers(doc, bt.build_symbol_index(store), limits={1: 3, 2: 2})
+    assert [p["code"] for p in parsed["picks"][1]] == ["301591", "603344", "000001"]
+    assert parsed["truncated"][1] == 2
+    store.close()
+
+
+def test_sync_tier_picks_honours_limits(tmp_path):
+    cfg = make_cfg(tmp_path, {"tiers": {"max_tier1": 2, "max_tier2": 1}})
+    store = _store(tmp_path)
+    store.save_summary(
+        {
+            "date": "2026-10-14",
+            "engine": "deepseek-flash",
+            "content": NEW_FORMAT_DOC,
+            "digest": "{}",
+        }
+    )
+    stats = bt.sync_tier_picks(store, cfg)
+    assert stats["tier1"] == 2 and stats["tier2"] == 1
+    assert stats["truncated"]["tier1"] == 1
+    picks = store.load_tier_picks()
+    assert len(picks[picks["tier"] == 1]) == 2
+    store.close()
+
+
 def _seed_history(store, days, closes):
     """写一段日线：``closes[secid] = [(date, open, close), …]``。"""
     rows = []
@@ -92,8 +124,12 @@ def test_evaluate_computes_returns_excess_and_tracking_state(tmp_path):
         store,
         days,
         {
-            "0.301591": [(d, 10.0 * (1.01 ** i), 10.0 * (1.01 ** (i + 1))) for i, d in enumerate(days)],
-            "0.000001": [(d, 10.0 * (0.99 ** i), 10.0 * (0.99 ** (i + 1))) for i, d in enumerate(days)],
+            "0.301591": [
+                (d, 10.0 * (1.01**i), 10.0 * (1.01 ** (i + 1))) for i, d in enumerate(days)
+            ],
+            "0.000001": [
+                (d, 10.0 * (0.99**i), 10.0 * (0.99 ** (i + 1))) for i, d in enumerate(days)
+            ],
         },
     )
     store.save_tier_picks(
@@ -185,7 +221,9 @@ def test_evaluate_close_entry_and_aggregates(tmp_path):
 def test_sync_tier_picks_from_stored_summaries(tmp_path, monkeypatch):
     """复盘落库之后能自动/手动解析成梯队名单；已有名单不重复解析（除非 --force）。"""
     store = _store(tmp_path)
-    store.save_summary({"date": "2026-10-14", "engine": "deepseek-flash", "content": NEW_FORMAT_DOC})
+    store.save_summary(
+        {"date": "2026-10-14", "engine": "deepseek-flash", "content": NEW_FORMAT_DOC}
+    )
     store.save_summary({"date": "2026-10-13", "engine": "rule", "content": "规则版，没有梯队名单"})
     stats = bt.sync_tier_picks(store, make_cfg(tmp_path))
     assert stats["dates"] == 1 and stats["tier1"] == 3 and stats["tier2"] == 1

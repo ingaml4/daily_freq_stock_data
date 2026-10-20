@@ -1325,7 +1325,12 @@ background:#3a2a12;border:1px solid #7a5a1e}
 footer{margin-top:24px;color:var(--muted);font-size:12px}
 """
 
-TIERS_DAY_OPTIONS: Tuple[Tuple[int, str], ...] = ((7, "最近 7 个名单日"), (30, "30 天"), (90, "90 天"), (0, "全部"))
+TIERS_DAY_OPTIONS: Tuple[Tuple[int, str], ...] = (
+    (7, "最近 7 个名单日"),
+    (30, "30 天"),
+    (90, "90 天"),
+    (0, "全部"),
+)
 
 
 def _pct(value: Any, digits: int = 2) -> str:
@@ -1384,8 +1389,9 @@ def render_tiers_page(
     ) + "<th>最大回撤均值</th><th>期间最大涨幅均值</th></tr>"
     lines = []
     for item in (result.get("by_tier") or {}).values():
+        tier_cls = int(item["tier"]) if int(item["tier"]) in (1, 2) else 2
         cells = [
-            f'<td class="l"><span class="tag t{int(item["tier"]) if int(item["tier"]) in (1, 2) else 2}">'
+            f'<td class="l"><span class="tag t{tier_cls}">'
             f'{html.escape(str(item["label"]))}</span></td>',
             f'<td>{item["picks"]} <span class="muted">(完成 {item["finished"]})</span></td>',
         ]
@@ -1444,7 +1450,8 @@ def render_tiers_page(
         ]
         for horizon in horizons:
             cells.append(f'<td>{_pct((row.get("rets") or {}).get(horizon))}</td>')
-        cells.append(f'<td>{_pct((row.get("excess") or {}).get(horizons[0] if horizons else 1))}</td>')
+        excess = (row.get("excess") or {}).get(horizons[0] if horizons else 1)
+        cells.append(f"<td>{_pct(excess)}</td>")
         cells.append(f'<td>{_pct(row.get("max_gain"), 1)}</td>')
         cells.append(f'<td>{_pct(row.get("max_drawdown"), 1)}</td>')
         status = str(row.get("status") or "")
@@ -1693,7 +1700,9 @@ def make_handler(
             if path in ("/tiers", "/tiers.csv", "/api/tiers"):
                 days_value = params.get("days")
                 try:
-                    days = int(days_value) if days_value not in (None, "") else default_backtest_days
+                    days = (
+                        int(days_value) if days_value not in (None, "") else default_backtest_days
+                    )
                 except ValueError:
                     days = default_backtest_days
                 try:
@@ -1788,8 +1797,10 @@ def make_handler(
                     '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
                     '<meta name="viewport" content="width=device-width, initial-scale=1">'
                     "<title>%s 当日总结</title><style>body{background:#0f1115;color:#e8ecf3;"
-                    "font:14px/1.7 -apple-system,'PingFang SC',Arial,sans-serif;margin:0;padding:14px}"
-                    "pre{white-space:pre-wrap;word-break:break-word;background:#171a21;border:1px solid "
+                    "font:14px/1.7 -apple-system,'PingFang SC',Arial,sans-serif;"
+                    "margin:0;padding:14px}"
+                    "pre{white-space:pre-wrap;word-break:break-word;background:#171a21;"
+                    "border:1px solid "
                     "#262b36;border-radius:10px;padding:12px}a{color:#4aa8ff}</style></head><body>"
                     '<p><a href="/">← 返回</a> · <a href="/summary.md">下载 Markdown</a> · '
                     '<a href="/tiers">梯队回测</a> · 引擎 %s</p>'

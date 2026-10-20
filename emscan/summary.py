@@ -23,8 +23,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from .industry import display_map as _industry_map
 from .backtest import sync_tier_picks, tier_limits
+from .industry import display_map as _industry_map
 from .store import Store
 from .tzutil import now_hm
 from .views import view_criteria, vol_up_mask
@@ -202,7 +202,9 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
     )
     digest: Dict[str, Any] = {
         "date": str(trade_date),
-        "口径": {label: view_criteria(cfg).get(flag[2:], "") for flag, label in VIEW_LABELS.items()},
+        "口径": {
+            label: view_criteria(cfg).get(flag[2:], "") for flag, label in VIEW_LABELS.items()
+        },
         "totals": {},
         "boards": {},
         "views": {},
@@ -336,8 +338,7 @@ def digest_for_store(digest: Dict[str, Any], keep: int = 20) -> Dict[str, Any]:
     for key, value in digest.items():
         if key == "views":
             lean["views"] = {
-                label: {"只数": len(items), "代表": items[:keep]}
-                for label, items in value.items()
+                label: {"只数": len(items), "代表": items[:keep]} for label, items in value.items()
             }
         elif key == "全市场简表":
             lean["全市场简表"] = {"只数": len(value), "说明": "完整名单见 daily_signals 表"}
@@ -401,7 +402,9 @@ def rule_summary(digest: Dict[str, Any]) -> str:
             lines.append(f"- {it['代码']} {it['名称']}: " + "，".join(metric))
     lines.append("")
     lines.append(
-        "> 规则版总结：仅统计本地扫描数据，未调用 AI。配置 `summary.api_key`（或环境变量 DEEPSEEK_API_KEY）后会自动改成 AI 复盘。"
+        "> 规则版总结：仅统计本地扫描数据，未调用 AI，因此**没有第一/第二梯队名单**"
+        "（梯队由 AI 复盘按 TIER1/TIER2 格式生成）。配置 `summary.api_key`"
+        "（或环境变量 DEEPSEEK_API_KEY）后会自动改成 AI 复盘。"
     )
     return "\n".join(lines)
 
@@ -616,13 +619,74 @@ def extract_text(payload: Any) -> str:
     return ""
 
 
+def _signal_state(store, trade_date: str) -> Optional[Dict[str, Any]]:
+    """当日信号缓存状态；老版本/测试桩 store 没有该方法时返回 None（未知 = 放行）。"""
+    fn = getattr(store, "signal_state", None)
+    if fn is None:
+        return None
+    try:
+        return fn(str(trade_date))
+    except Exception as exc:  # 查状态失败不该挡住复盘
+        log.warning("读取当日信号状态失败（按就绪处理）：%s", exc)
+        return None
+
+
+def _stored_fingerprint(record: Dict[str, Any]) -> str:
+    """从落库的 digest JSON 里读指纹；旧版总结没有指纹 → 空串，从而触发重建。"""
+    raw = str((record or {}).get("digest") or "")
+    if not raw:
+        return ""
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return ""
+    return str(data.get("_fingerprint") or "") if isinstance(data, dict) else ""
+
+
+def _summary_ready(cfg, state: Optional[Dict[str, Any]]) -> tuple:
+    """判断当天数据是否足以出复盘：有缓存行，且指标信号已经写进去。"""
+    if state is None:
+        return True, ""
+    if int(state.get("rows") or 0) <= 0:
+        return False, "当日信号缓存为空（scan/signals 还没跑）"
+    require_indicators = bool(cfg.get("summary.require_indicators", True)) and bool(
+        cfg.get("signals.enabled", True)
+    )
+    if require_indicators and int(state.get("indicator_filled") or 0) <= 0:
+        return False, "当日技术指标信号还没写入缓存（等 signals 步骤跑完）"
+    return True, ""
+
+
 def generate_summary(
     store: Store, cfg, trade_date: str, api_key: str = "", force: bool = False
 ) -> Dict[str, Any]:
-    """生成（或复用）当日总结：有密钥走 AI，没有就出规则版。"""
+    """生成（或复用）当日总结：有密钥走 AI，没有就出规则版。
+
+    两个防坑逻辑：
+
+    * **就绪度**：当天指标信号还没写进 ``daily_signals`` 时先不出总结（否则会在
+      网页非空的情况下生成一份"MACD/KDJ/布林 0 只"的假复盘）；``force=True`` 可跳过。
+    * **数据指纹**：库里存的 digest 带一个"行数 + 各视图命中数"的指纹，
+      数据变了会自动重算；旧版没有指纹的总结会在下一次运行时自动重建。
+    """
     api_key = api_key or str(cfg.get("summary.api_key") or "")
+    state = _signal_state(store, trade_date)
+    ready, reason = _summary_ready(cfg, state)
+    if not ready and not force:
+        log.warning("总结暂不生成：%s（数据齐了再跑，或加 --force 强制生成）", reason)
+        return {
+            "date": str(trade_date),
+            "engine": "pending",
+            "content": "",
+            "digest": "{}",
+            "pending": True,
+            "reason": reason,
+        }
+    fingerprint = str((state or {}).get("fingerprint") or "")
     existing = store.get_summary(str(trade_date))
-    if existing and not force:
+    if existing and not force and _stored_fingerprint(existing) == fingerprint:
+        existing = dict(existing)
+        existing["reused"] = True
         return existing
     digest = build_digest(store, cfg, str(trade_date))
     engine = "rule"
@@ -648,11 +712,14 @@ def generate_summary(
                 log.warning("AI 没返回正文，本次先用规则版总结（上面有原始响应片段）")
         except Exception as exc:
             log.error("调用 DeepSeek 失败（本次先出规则版）：%s", exc)
+    lean = digest_for_store(digest)
+    lean["_fingerprint"] = fingerprint
     record = {
         "date": str(trade_date),
         "engine": engine,
         "content": content,
-        "digest": json.dumps(digest_for_store(digest), ensure_ascii=False),
+        "digest": json.dumps(lean, ensure_ascii=False),
+        "fingerprint": fingerprint,
     }
     store.save_summary(record)
     # 复盘落库后顺手把 TIER1/TIER2 两行解析成梯队名单（回测页面的数据来源）

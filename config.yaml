@@ -115,8 +115,10 @@ mairui:
 #   reasoning_effort: high     # none / low / high / max（none=关思考；max 预算更大更慢）
 #   max_tokens: 32000          # 生成上限（官方允许 1~393216）；思考 token 也算在里面，填 0=用官方默认
 #   api_key: ""                # 建议用环境变量，不要写进 git
+#   require_indicators: true   # 当天指标信号还没进缓存时先不出总结（--force 可绕过）
 
 # 复盘梯队（第一/第二梯队）与跟踪回测：复盘文末固定输出 TIER1/TIER2 两行，程序解析后跟踪
+# 注意：这两个上限是**硬约束**，解析时会按它截断（不再只靠提示词约束 AI）
 # tiers:
 #   max_tier1: 8        # 提示词里写给 AI 的上限（第一梯队 3~8 只，宁少而精）
 #   max_tier2: 15

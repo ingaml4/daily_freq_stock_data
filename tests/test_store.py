@@ -312,3 +312,23 @@ def test_load_daily_signals_filters(tmp_path):
     assert store.upsert_daily_signals([{"secid": "1.600001", "date": "nan", "s_vol_spike": 1}]) == 0
     store.close()
     store.close()
+
+
+def test_signal_state_reports_readiness_and_fingerprint(tmp_path):
+    """复盘用的就绪度：先只有放量行（指标未写）→ 再写指标标记，指纹应变化。"""
+    store = Store(tmp_path / "market.sqlite").init_schema()
+    date = "2026-10-19"
+    store.upsert_daily_signals([{"secid": "1.600000", "date": date, "s_vol_spike": 1}])
+    state = store.signal_state(date)
+    assert state["rows"] == 1 and state["vol_spike"] == 1
+    assert state["indicator_filled"] == 0
+    before = state["fingerprint"]
+
+    store.upsert_daily_signals(
+        [{"secid": "1.600000", "date": date, "s_macd_golden": 1, "s_kdj_golden": 1}]
+    )
+    state = store.signal_state(date)
+    assert state["indicator_filled"] == 1
+    assert state["macd_golden"] == 1 and state["kdj_golden"] == 1
+    assert state["fingerprint"] != before
+    store.close()

@@ -4,7 +4,7 @@ import pandas as pd
 import yaml
 from helpers import bar, make_cfg, trading_dates
 
-from emscan.cli import main, open_store
+from emscan.cli import _post_sync, main, open_store
 from emscan.demo import synthesize
 from emscan.notify import build_text, send
 from emscan.pipeline import (
@@ -630,3 +630,25 @@ def test_hits_command_reads_cache(tmp_path):
     assert main(["--config", str(config_path), "hits", "--out", str(out)]) == 0
     frame = pd.read_csv(out)
     assert len(frame) == 2  # 放量股 + 金叉股
+
+
+def test_post_sync_runs_signals_before_summary(tmp_path, monkeypatch):
+    """总结必须排在指标信号之后，否则 MACD/KDJ/布林 会在总结里显示 0 只。"""
+    import argparse
+    import types
+
+    from emscan import cli
+
+    cfg = make_cfg(tmp_path)
+    calls = []
+    monkeypatch.setattr(cli, "cmd_scan", lambda *a, **k: calls.append("scan") or 0)
+    monkeypatch.setattr(cli, "cmd_box", lambda *a, **k: calls.append("box") or 0)
+    monkeypatch.setattr(cli, "cmd_doji", lambda *a, **k: calls.append("doji") or 0)
+    monkeypatch.setattr(cli, "cmd_signals", lambda *a, **k: calls.append("signals") or 0)
+    monkeypatch.setattr(cli, "cmd_summary", lambda *a, **k: calls.append("summary") or 0)
+    monkeypatch.setattr(cli, "summary_is_due", lambda _cfg: True)
+
+    stats = types.SimpleNamespace(trade_date="2026-10-19")
+    args = argparse.Namespace(trade_date=None, skip_signals=False, force=False)
+    assert _post_sync(cfg, args, stats, 0) == 0
+    assert calls == ["scan", "box", "doji", "signals", "summary"]
