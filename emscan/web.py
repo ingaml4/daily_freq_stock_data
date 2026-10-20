@@ -280,6 +280,11 @@ TABS_CSS = """\
 .sub-tabs a{padding:5px 12px;font-size:13px}
 """
 
+# 三个页面共用的页面容器：统一左右边距与最大宽度（表格页与阅读页同一左边缘）
+LAYOUT_CSS = """\
+.page{max-width:1400px;margin:0 auto;padding-left:16px;padding-right:16px}
+"""
+
 
 def render_top_tabs(active: str) -> str:
     """一级导航：信号 / 当日总结 / 梯队回测。"""
@@ -879,7 +884,7 @@ body{margin:0;background:var(--bg);color:var(--fg);
 font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",Arial,sans-serif}
 a{color:var(--accent);text-decoration:none}
 header{position:sticky;top:0;z-index:6;background:rgba(15,17,21,.96);
-border-bottom:1px solid var(--line);padding:10px 12px 8px}
+border-bottom:1px solid var(--line);padding:10px 0 8px}
 .brand{font-weight:700;font-size:16px;margin-bottom:8px}
 .brand span{color:var(--muted);font-weight:400;font-size:12px;margin-left:6px}
 .brand .logout{float:right;font-weight:400;font-size:12px;color:var(--muted)}
@@ -892,7 +897,7 @@ margin-top:8px;font-size:12px;color:var(--muted)}
 .toolbar input,.toolbar button{background:var(--card);color:var(--fg);
 border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px}
 .toolbar button{background:var(--accent);color:#08121d;font-weight:700;border-color:var(--accent)}
-main{padding:10px 12px 40px}
+main{padding:10px 0 40px}
 .hint{color:var(--muted);font-size:12px;margin-bottom:8px}
 .hint b{color:var(--fg)}
 .err{background:#2a1a1a;border:1px solid #5b2a2a;padding:10px;border-radius:8px}
@@ -1301,9 +1306,10 @@ def render_html(
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)} · {html.escape(ctx.title or "")}</title>
-<style>{CSS}{TABS_CSS}</style></head>
+<style>{CSS}{TABS_CSS}{LAYOUT_CSS}</style></head>
 <body>
 <header>
+  <div class="page">
   <div class="brand">{html.escape(title)}<span>{html.escape(ctx.title or "")}</span>
     {('<details class="dd help"><summary title="筛选口径">筛选口径 ?</summary>'
       f'<div class="dd-body">{help_text}</div></details>') if help_text else ""}
@@ -1316,14 +1322,15 @@ def render_html(
     <a class="refresh" href="/signals/{ctx.view}">刷新</a>
     {board_filter}
   </form>
+  </div>
 </header>
-<main>
+<main class="page">
   {banner}
   <div class="hint">{hint}</div>
   {pager_block}
   {body}{empty}
 </main>
-<footer>数据来自本地每日信号缓存（daily_signals）· 代码点击跳转雪球行情 · 表头可点击排序</footer>
+<footer class="page">数据来自本地每日信号缓存（daily_signals）· 代码点击跳转雪球行情 · 表头可点击排序</footer>
 <script>{js_rendered}</script>
 </body></html>
 """
@@ -1342,8 +1349,8 @@ body{margin:0;background:var(--bg);color:var(--fg);
 font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",Arial,sans-serif}
 a{color:var(--accent);text-decoration:none}
 header{position:sticky;top:0;z-index:5;background:rgba(15,17,21,.96);
-border-bottom:1px solid var(--line);padding:10px 12px}
-main{padding:12px 12px 40px}
+border-bottom:1px solid var(--line);padding:10px 0}
+main{padding:12px 0 40px}
 h1{margin:0 0 6px;font-size:17px}
 h2{margin:20px 0 8px;font-size:15px}
 .hint{color:var(--muted);font-size:12.5px}
@@ -1391,7 +1398,7 @@ body{
   font:15px/1.8 -apple-system,BlinkMacSystemFont,'PingFang SC',
        'Microsoft YaHei',Arial,sans-serif;
 }
-.wrap{max-width:920px;margin:0 auto;padding:20px 20px 64px}
+.page{padding-top:20px;padding-bottom:64px}
 .top{
   display:flex;flex-wrap:wrap;gap:12px;align-items:center;
   justify-content:space-between;border-bottom:1px solid #262b36;
@@ -1409,7 +1416,7 @@ body{
   font-size:13px;text-decoration:none;
 }
 .actions a:hover{color:#fff}
-.md{overflow-wrap:anywhere}
+.md{overflow-wrap:anywhere;max-width:920px}
 .md h1,.md h2,.md h3,.md h4{
   line-height:1.4;margin:1.7em 0 .6em;font-weight:600;
 }
@@ -1471,8 +1478,8 @@ def render_summary_page(record: Dict[str, Any]) -> str:
         '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{date} 当日总结</title>"
-        f"<style>{_SUMMARY_CSS}{TABS_CSS}</style></head><body>"
-        '<div class="wrap"><header class="top">'
+        f"<style>{_SUMMARY_CSS}{TABS_CSS}{LAYOUT_CSS}</style></head><body>"
+        '<div class="page"><header class="top">'
         f"<h1>{date} 当日总结{badge}</h1>"
         '<div class="actions"><a href="/summary.md" download>下载 Markdown</a></div>'
         + render_top_tabs("summary")
@@ -1493,8 +1500,8 @@ def render_summary_notice(message: str) -> str:
         '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>当日总结</title>"
-        f"<style>{_SUMMARY_CSS}{TABS_CSS}</style></head><body>"
-        '<div class="wrap"><header class="top"><h1>当日总结</h1>'
+        f"<style>{_SUMMARY_CSS}{TABS_CSS}{LAYOUT_CSS}</style></head><body>"
+        '<div class="page"><header class="top"><h1>当日总结</h1>'
         + render_top_tabs("summary")
         + "</header>"
         + f'<div class="notice">{text}</div></div></body></html>'
@@ -1652,16 +1659,16 @@ def _tiers_page_shell(title: str, toolbar: str, body: str, _extra: str = "") -> 
         "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>梯队回测 · {html.escape(title)}</title>"
-        f"<style>{TIERS_CSS}{TABS_CSS}</style></head><body>"
-        f"<header><h1>梯队回测（复盘第一/第二梯队跟踪）</h1>"
+        f"<style>{TIERS_CSS}{TABS_CSS}{LAYOUT_CSS}</style></head><body>"
+        f'<header><div class="page"><h1>梯队回测（复盘第一/第二梯队跟踪）</h1>'
         + render_top_tabs("tiers")
         + '<div class="hint">数据来自每份复盘文末的 TIER1/TIER2 名单 + 本地日线行情</div>'
-        + "</header>"
+        + "</div></header>"
     )
     return (
         head
-        + f"{toolbar}<main>{body}</main>"
-        "<footer>代码点击跳转雪球行情 · 收益均按交易日计算 · "
+        + f'{toolbar}<main class="page">{body}</main>'
+        '<footer class="page">代码点击跳转雪球行情 · 收益均按交易日计算 · '
         "「跟踪中」表示持有期未走完，数字会随后续行情更新</footer>"
         "</body></html>"
     )

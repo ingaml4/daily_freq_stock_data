@@ -533,6 +533,7 @@ def test_top_tabs_and_signal_subtabs(tmp_path):
     assert 'aria-current="page">信号</a>' in page
     assert 'href="/summary"' in page and 'href="/tiers"' in page
     assert '<nav class="tabs sub-tabs">' in page
+    assert '<main class="page">' in page and '<footer class="page">' in page
     for spec in VIEWS.values():
         assert spec["nav"] in page
 
@@ -540,11 +541,13 @@ def test_top_tabs_and_signal_subtabs(tmp_path):
     assert '<nav class="tabs top-tabs">' in summary
     assert '<nav class="tabs sub-tabs">' not in summary
     assert 'aria-current="page">当日总结</a>' in summary
+    assert '<div class="page">' in summary
 
     tiers = _tiers_page_shell("测试", "", "")
     assert '<nav class="tabs top-tabs">' in tiers
     assert '<nav class="tabs sub-tabs">' not in tiers
     assert 'aria-current="page">梯队回测</a>' in tiers
+    assert '<main class="page">' in tiers and '<footer class="page">' in tiers
 
 
 def test_serve_accepts_all_cli_options(tmp_path):
