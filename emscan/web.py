@@ -285,14 +285,25 @@ LAYOUT_CSS = """\
 .page{max-width:1400px;margin:0 auto;padding-left:16px;padding-right:16px}
 body{font:14px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC",
   "Microsoft YaHei",Arial,sans-serif}
-.brand{font-size:20px;font-weight:700}
-.top h1,header h1{font-size:20px;font-weight:700}
+.brand,.top h1,header h1{font-size:20px;font-weight:700;margin:0 0 8px}
 .hint{font-size:12px}
+h2{font-size:16px}
+table{font-size:13px}
+thead th{font-size:12px}
+th{font-size:12px}
+.toolbar{font-size:12px}
+.toolbar a,.toolbar button,.toolbar input,.toolbar select{font-size:13px}
+footer{font-size:12px}
 .md{font-size:14px;line-height:1.75}
 .md h1{font-size:22px}
 .md h2{font-size:18px}
 .md h3{font-size:16px}
 .md h4{font-size:14px}
+@media(max-width:760px){
+  header{position:static}
+  .page{padding-left:12px;padding-right:12px}
+  table{font-size:12px}
+}
 """
 
 
@@ -943,8 +954,16 @@ table td:first-child,table th:first-child{min-width:66px}
 .dd{position:relative}
 .dd.help{float:right;font-weight:400}
 .dd.help summary{font-size:12px;color:var(--muted)}
-.dd.help .dd-body{right:0;left:auto;max-width:min(92vw,520px);
-white-space:normal;line-height:1.7;color:var(--muted)}
+.dd.help .dd-body{right:0;left:auto;width:min(92vw,460px);
+max-height:min(60vh,440px);overflow:auto;white-space:normal;
+line-height:1.65;color:var(--muted);font-size:12.5px}
+.dd-body b,.dd-body strong{color:var(--fg);font-weight:600}
+.dd-body code{background:#0f141c;border:1px solid #26303f;border-radius:4px;
+padding:0 4px;color:#cfe3ff;font-size:12px}
+.dd-body ul{margin:6px 0 0;padding-left:1.2em}
+.dd-body li{margin:3px 0}
+.dd-body .help-title{color:var(--fg);font-weight:700;font-size:13px;margin-bottom:4px}
+.dd-body .help-note{margin:8px 0 0;color:var(--muted)}
 .dd summary{list-style:none;cursor:pointer;padding:6px 10px;border:1px solid var(--line);
 border-radius:8px;background:var(--card);color:var(--fg);font-size:13px}
 .dd summary::-webkit-details-marker{display:none}
@@ -971,8 +990,11 @@ color:#08121d;font-weight:700}
   body{font-size:13px}
   thead th,tbody td{padding:6px;font-size:12px}
   table td:nth-child(2),table th:nth-child(2){left:var(--col1-w,60px)}
+  header{position:static}
+  .dd.help{float:none;display:inline-block;margin-left:6px}
+  .dd.help .dd-body{width:min(92vw,360px)}
 }
-footer{color:var(--muted);font-size:11px;padding:0 12px 24px}
+footer{color:var(--muted);font-size:11px;padding:0 0 24px}
 """
 
 JS = """\
@@ -1364,7 +1386,7 @@ main{padding:12px 0 40px}
 h1{margin:0 0 6px;font-size:17px}
 h2{margin:20px 0 8px;font-size:15px}
 .hint{color:var(--muted);font-size:12.5px}
-.toolbar{padding:8px 12px;border-bottom:1px solid var(--line);font-size:12.5px;
+.toolbar{padding:8px 0;border-bottom:1px solid var(--line);font-size:12.5px;
 color:var(--muted);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .toolbar a,.toolbar span.on{padding:5px 9px;border:1px solid var(--line);border-radius:8px}
 .toolbar span.on{border-color:var(--accent);color:var(--fg)}

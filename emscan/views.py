@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict
+from typing import Dict, Sequence
 
 import pandas as pd
 
@@ -33,100 +33,124 @@ def vol_up_mask(frame: pd.DataFrame, cfg) -> pd.Series:
     return pct >= vol_up_min_pct(cfg)
 
 
+def _help_block(title: str, items: Sequence[str], note: str = "") -> str:
+    body = "".join(f"<li>{item}</li>" for item in items)
+    tail = f'<p class="help-note">{note}</p>' if note else ""
+    return f'<div class="help-title">{title}</div><ul>{body}</ul>{tail}'
+
+
 def build_view_help(cfg) -> Dict[str, str]:
-    """生成每个按钮的"筛选口径"说明（数值取自 config，改配置就会跟着变）。"""
+    """生成每个按钮的"筛选口径"（数值取自 config，改配置就会跟着变）。
+
+    返回可读的 HTML 片段：网页里是「标题 + 要点列表」的小弹层；
+    ``plain_help`` 会再压成纯文本喂给 AI。
+    """
     g = cfg.get
-    help_text = {
-        "vol_spike": (
-            "放量命中：量比5 ≥ {v5} 且（量比20 ≥ {v20} 或 Z60 ≥ {z}）；"
-            "当日成交额 ≥ {amt} 万元、换手率 ≥ {to}%、至少 {mb} 根K线、非ST/停牌。<br>"
-            "<b>本按钮只显示当日涨幅 ≥ {up}% 的</b>（放量下跌、放量滞涨不在这里显示；"
-            "完整名单见 `python3 -m emscan hits --only vol_spike`）。"
-        ).format(
-            v5=g("scan.vol_ratio_5_min", 2.0),
-            v20=g("scan.vol_ratio_20_min", 1.5),
-            z=g("scan.z_min", 3.0),
-            amt=round(float(g("scan.min_amount", 0) or 0) / 10000),
-            to=g("scan.min_turnover", 0.5),
-            mb=g("universe.min_bars", 25),
-            up=g("scan.vol_up_min_pct", 3.0),
+    vol_up = g("scan.vol_up_min_pct", 3.0)
+    box_w = g("box.window", 40)
+    box_months = float(box_w or 40) / 20
+    rev_dd = round(abs(float(g("reversal.max_drawdown_from_high", -0.15) or -0.15)) * 100, 2)
+    rev_p60 = round(float(g("reversal.max_pos60", 0.35) or 0.35) * 100, 2)
+    rev_d20 = round(float(g("reversal.min_drop20", 0.15) or 0.15) * 100, 2)
+    doji_dd = round(abs(float(g("doji.max_drawdown_from_high", -0.20) or -0.20)) * 100, 2)
+    return {
+        "vol_spike": _help_block(
+            "放量大涨",
+            [
+                f"量比5 ≥ {g('scan.vol_ratio_5_min', 2.0)}，"
+                f"且（量比20 ≥ {g('scan.vol_ratio_20_min', 1.5)} "
+                f"或 Z60 ≥ {g('scan.z_min', 3.0)}）",
+                f"成交额 ≥ {round(float(g('scan.min_amount', 0) or 0) / 10000)} 万元，"
+                f"换手率 ≥ {g('scan.min_turnover', 0.5)}%，"
+                f"至少 {g('universe.min_bars', 25)} 根 K 线",
+                "剔除 ST / 停牌",
+                f"只显示当日涨幅 ≥ {vol_up}% 的股票（放量下跌、放量滞涨不在此视图）",
+            ],
+            "完整名单可用 <code>emscan hits --only vol_spike</code> 查看。",
         ),
-        "macd_golden": "MACD 金叉：日线 DIFF 上穿 DEA（昨天 DIFF ≤ DEA，今天 DIFF > DEA），"
-        "用前复权价算。报告里同时给出 DIFF/DEA/柱值。",
-        "kdj_golden": "KDJ 金叉：K 上穿 D（参数 9,3,3；昨天 K ≤ D，今天 K > D）。"
-        "报告里带 K/D/J 三个值，J 越极端说明短线越超买/超卖。",
-        "boll_break_lower": "BOLL 下轨突破：当日<b>收盘 ≤ 布林下轨</b>（BOLL 20 日 ±2σ）。"
-        "报告里给出上/中/下轨和「布林位置」（0=贴下轨）。",
-        "box_range": (
-            "箱体震荡 + 换手健康（{w} 个交易日 ≈ {m:.0f} 个月）：箱体高度 {w1}~{w2}、"
-            "净涨跌 ≤ ±{net}、|MA5-MA20|/MA20 ≤ {gap}；日均换手 {t1}~{t2}% 且变异系数 ≤ {cv}；"
-            "日均振幅 {a1}~{a2}%；|涨跌|≥9.5% 天数 ≤ {ex}；成交额 ≥ {amt} 万；"
-            "有效交易日 ≥ {days}、非ST。<br>按<b>箱体位置升序</b>（0=贴箱底）排，方便高抛低吸。"
-        ).format(
-            w=g("box.window", 40),
-            m=float(g("box.window", 40) or 40) / 20,
-            w1=g("box.min_width", 0.06),
-            w2=g("box.max_width", 0.35),
-            net=g("box.max_net_chg", 0.12),
-            gap=g("box.max_ma_gap", 0.04),
-            t1=g("box.min_avg_turnover", 1.0),
-            t2=g("box.max_avg_turnover", 15.0),
-            cv=g("box.max_turnover_cv", 1.0),
-            a1=g("box.min_avg_amplitude", 2.0),
-            a2=g("box.max_avg_amplitude", 9.0),
-            ex=g("box.max_extreme_days", 2),
-            amt=round(float(g("box.min_amount", 0) or 0) / 10000),
-            days=g("box.min_valid_days", 35),
+        "macd_golden": _help_block(
+            "MACD 金叉",
+            [
+                "日线 DIFF 上穿 DEA（昨日 DIFF ≤ DEA，今日 DIFF > DEA）",
+                "使用前复权价计算；表格同时给出 DIFF / DEA / 柱值",
+            ],
         ),
-        "reversal": (
-            "<b>底部反转信号（评分制）</b>：先判断「是不是在底部区域」，再看有几条积极证据叠加，"
-            "分越高越强。<br>"
-            "① <b>底部上下文</b>（至少一条）：距 {dw} 个交易日高点回撤 ≥ {dd}、"
-            "或 60 日区间位置 ≤ {p60}、或 20 日跌幅 ≥ {d20}；<br>"
-            "② <b>证据与权重</b>：底部放量大涨（量≥{sv}× 且涨幅≥{sp}%）+25、"
-            "缩量止跌（量≤{sr}× 且 涨跌幅 {lo}~{hi}%）+20、长下影 +15、十字星 +10、"
-            "收阳且收在振幅上半部 +10、20 日极低位 +10、60 日低位 +10；<br>"
-            "③ 分数 ≥ {ms} 且有「放量/缩量」这类量价证据才算命中；按反转分降序排。"
-        ).format(
-            dw=g("reversal.drawdown_window", 120),
-            dd=g("reversal.max_drawdown_from_high", -0.15),
-            p60=g("reversal.max_pos60", 0.35),
-            d20=g("reversal.min_drop20", 0.15),
-            sv=g("reversal.surge_vol_ratio", 1.8),
-            sp=g("reversal.surge_pct_chg", 4.0),
-            sr=g("reversal.shrink_ratio", 0.6),
-            lo=-1.5,
-            hi=2.0,
-            ms=g("reversal.min_score", 55),
+        "kdj_golden": _help_block(
+            "KDJ 金叉",
+            [
+                "K 上穿 D（参数 9,3,3；昨日 K ≤ D，今日 K > D）",
+                "表格给出 K / D / J；J 越极端，短线越超买或超卖",
+            ],
         ),
-        "low_doji": (
-            "<b>缩量止跌</b>（三条同时满足）：<br>"
-            "① <b>大幅回撤</b>：距最近 {w} 个交易日高点回撤 ≥ {dd}；<br>"
-            "② <b>突然缩量</b>：当日量 ≤ 之前 {sw} 个交易日均量 × {sr}；<br>"
-            "③ <b>当日止跌</b>：涨跌幅在 {lo}% ~ {hi}% 之间（微红/微跌都算，大涨不算），"
-            "且收盘不在当日最低（收盘位置 ≥ {pos}）。<br>"
-            "另外：成交额 ≥ {amt} 万、换手 ≤ {to}%、≥{mb} 根K线、非ST；"
-            "形态（小实体/长下影）默认不作条件。"
-        ).format(
-            w=g("doji.drawdown_window", 120),
-            pos=g("doji.close_off_low_ratio", 0.35),
-            dd=g("doji.max_drawdown_from_high", -0.20),
-            lo=g("doji.min_pct_chg", -1.5),
-            hi=g("doji.max_pct_chg", 3.0),
-            sw=g("doji.shrink_window", 5),
-            sr=g("doji.shrink_ratio", 0.6),
-            amt=round(float(g("doji.min_amount", 0) or 0) / 10000),
-            to=g("doji.max_turnover", 5.0),
-            mb=g("doji.min_bars", 45),
+        "boll_break_lower": _help_block(
+            "布林下轨突破",
+            [
+                "当日收盘 ≤ 布林下轨（BOLL 20 日 ± 2σ）",
+                "表格给出上轨 / 中轨 / 下轨与布林位置（0 = 贴下轨）",
+            ],
+        ),
+        "box_range": _help_block(
+            f"箱体做T（{box_w} 个交易日 ≈ {box_months:.0f} 个月）",
+            [
+                f"箱体高度 {float(g('box.min_width', 0.06) or 0.06) * 100:.0f}% ~ "
+                f"{float(g('box.max_width', 0.35) or 0.35) * 100:.0f}%，"
+                f"净涨跌 ≤ ±{float(g('box.max_net_chg', 0.12) or 0.12) * 100:.0f}%",
+                f"|MA5 − MA20| / MA20 ≤ "
+                f"{float(g('box.max_ma_gap', 0.04) or 0.04) * 100:.0f}%",
+                f"日均换手 {g('box.min_avg_turnover', 1.0)}% ~ "
+                f"{g('box.max_avg_turnover', 15.0)}%，"
+                f"换手变异系数 ≤ {g('box.max_turnover_cv', 1.0)}",
+                f"日均振幅 {g('box.min_avg_amplitude', 2.0)}% ~ "
+                f"{g('box.max_avg_amplitude', 9.0)}%，"
+                f"|涨跌| ≥ 9.5% 的天数 ≤ {g('box.max_extreme_days', 2)}",
+                f"成交额 ≥ {round(float(g('box.min_amount', 0) or 0) / 10000)} 万元，"
+                f"有效交易日 ≥ {g('box.min_valid_days', 35)}",
+                "按箱体位置升序（0 = 贴箱底），方便高抛低吸",
+            ],
+        ),
+        "reversal": _help_block(
+            "底部反转（评分制）",
+            [
+                f"底部上下文（至少一条）：距 {g('reversal.drawdown_window', 120)} 日高点"
+                f"回撤 ≥ {rev_dd}%，或 60 日区间位置 ≤ {rev_p60}%，"
+                f"或 20 日跌幅 ≥ {rev_d20}%",
+                f"底部放量大涨 +25（量比 ≥ {g('reversal.surge_vol_ratio', 1.8)}、"
+                f"涨幅 ≥ {g('reversal.surge_pct_chg', 4.0)}%）",
+                f"缩量止跌 +20（量 ≤ {g('reversal.shrink_ratio', 0.6)}× 均量、"
+                "涨跌幅 -1.5% ~ 2.0%）",
+                "长下影 +15、十字星 +10、收阳且收在振幅上半部 +10、"
+                "20 日极低位 +10、60 日低位 +10",
+                f"分数 ≥ {g('reversal.min_score', 55)} 且至少有一条量价证据；"
+                "按反转分降序",
+            ],
+        ),
+        "low_doji": _help_block(
+            "缩量止跌",
+            [
+                f"大幅回撤：距 {g('doji.drawdown_window', 120)} 日高点回撤 ≥ {doji_dd}%",
+                f"突然缩量：当日量 ≤ 前 {g('doji.shrink_window', 5)} 日均量 × "
+                f"{g('doji.shrink_ratio', 0.6)}",
+                f"当日止跌：涨跌幅 {g('doji.min_pct_chg', -1.5)}% ~ "
+                f"{g('doji.max_pct_chg', 3.0)}%，"
+                f"收盘位置 ≥ {g('doji.close_off_low_ratio', 0.35)}",
+                f"成交额 ≥ {round(float(g('doji.min_amount', 0) or 0) / 10000)} 万，"
+                f"换手 ≤ {g('doji.max_turnover', 5.0)}%，"
+                f"至少 {g('doji.min_bars', 45)} 根 K 线，非 ST",
+                "形态（小实体 / 长下影）默认不作条件",
+            ],
         ),
     }
-    return help_text
 
 
 def plain_help(text: str) -> str:
     """把口径说明转成纯文本（网页按钮的悬浮提示、喂给 AI 的口径说明都用它）。"""
-    text = text.replace("<br>", " / ").replace("<b>", "").replace("</b>", "")
-    return re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"<br\s*/?>", " / ", text)
+    text = re.sub(r"</li\s*>", "；", text)
+    text = re.sub(r"</p\s*>", "。", text)
+    text = re.sub(r"</div\s*>", "：", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip(" ；。")
 
 
 def view_criteria(cfg) -> Dict[str, str]:

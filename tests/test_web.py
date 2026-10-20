@@ -554,6 +554,20 @@ def test_top_tabs_and_signal_subtabs(tmp_path):
         assert "font:14px/1.7" in html_page
         assert ".top h1,header h1{font-size:20px" in html_page
     assert ".md h2{font-size:18px}" in summary
+    assert ".dd.help .dd-body" in page and "font-size:12.5px" in page
+
+
+def test_filter_help_popup_is_structured(tmp_path):
+    """筛选口径弹层：标题 + 要点列表，不再是一大段 <br> 拼接；命令用 code 包起来。"""
+    from emscan.views import build_view_help, plain_help
+
+    vol = build_view_help(make_cfg(tmp_path))["vol_spike"]
+    assert '<div class="help-title">放量大涨</div>' in vol
+    assert "<ul><li>量比5" in vol
+    assert "<code>emscan hits --only vol_spike</code>" in vol
+    assert "`" not in vol
+    text = plain_help(vol)
+    assert "放量大涨：" in text and "；成交额" in text
 
 
 def test_serve_accepts_all_cli_options(tmp_path):
