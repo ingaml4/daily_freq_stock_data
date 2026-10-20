@@ -36,6 +36,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, quote, urlparse
 
 from .mairui import BOARD_LABELS
+from .markdown_render import render_markdown
 from .signals import FLAG_LABELS
 from .store import Store
 from .tzutil import now_hm, today as tz_today
@@ -1342,6 +1343,117 @@ def _pct(value: Any, digits: int = 2) -> str:
     return f'<span class="{cls}">{number:+.{digits}f}%</span>'
 
 
+_SUMMARY_CSS = """
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{
+  margin:0;background:#0f1115;color:#e8ecf3;
+  font:15px/1.8 -apple-system,BlinkMacSystemFont,'PingFang SC',
+       'Microsoft YaHei',Arial,sans-serif;
+}
+.wrap{max-width:920px;margin:0 auto;padding:20px 20px 64px}
+.top{
+  display:flex;flex-wrap:wrap;gap:12px;align-items:center;
+  justify-content:space-between;border-bottom:1px solid #262b36;
+  padding-bottom:14px;margin-bottom:26px;
+}
+.top h1{font-size:21px;margin:0;font-weight:600}
+.badge{
+  display:inline-block;margin-left:8px;padding:1px 9px;border-radius:999px;
+  border:1px solid #2a3f5a;background:#16202e;color:#7cc4ff;
+  font-size:12px;vertical-align:middle;
+}
+nav a{color:#9fb3c8;text-decoration:none;margin-left:16px;font-size:14px}
+nav a:hover{color:#fff}
+.md{overflow-wrap:anywhere}
+.md h1,.md h2,.md h3,.md h4{
+  line-height:1.4;margin:1.7em 0 .6em;font-weight:600;
+}
+.md h1{font-size:24px}
+.md h2{font-size:20px;padding-left:11px;border-left:3px solid #4aa8ff}
+.md h3{font-size:17px;color:#cfe3ff}
+.md h4{font-size:15px;color:#cfe3ff}
+.md p{margin:.75em 0}
+.md ul,.md ol{padding-left:1.5em;margin:.7em 0}
+.md li{margin:.28em 0}
+.md strong{color:#fff}
+.md em{color:#d8e6f5}
+.md a{color:#4aa8ff;text-decoration:none}
+.md a:hover{text-decoration:underline}
+.md code{
+  background:#1b2230;border:1px solid #26303f;border-radius:5px;
+  padding:.1em .35em;font-size:.92em;
+}
+.md pre{
+  overflow:auto;background:#0b0f15;border:1px solid #262b36;
+  border-radius:10px;padding:13px 15px;margin:1em 0;
+}
+.md pre code{background:none;border:0;padding:0;font-size:.88em}
+.md blockquote{
+  margin:1em 0;padding:.1em 1em;border-left:3px solid #3a4a60;
+  background:#141922;color:#b9c6d6;border-radius:0 8px 8px 0;
+}
+.md hr{border:0;border-top:1px solid #262b36;margin:1.8em 0}
+.md table{
+  border-collapse:collapse;width:100%;margin:1.1em 0;font-size:13px;
+  display:block;overflow-x:auto;
+}
+.md th,.md td{
+  border:1px solid #2a3442;padding:6px 9px;text-align:left;white-space:nowrap;
+}
+.md th{background:#161d29;color:#cfe3ff}
+.md tbody tr:nth-child(even){background:#121722}
+footer{
+  margin-top:40px;padding-top:14px;border-top:1px solid #20262f;
+  color:#6f7d8c;font-size:12px;
+}
+.notice{padding:40px 0;color:#b9c6d6}
+@media(max-width:640px){
+  .wrap{padding:14px 14px 48px}
+  .top h1{font-size:18px}
+  nav a{margin:0 12px 0 0}
+  .md h2{font-size:18px}
+  .md table{font-size:12px}
+}
+"""
+
+
+def render_summary_page(record: Dict[str, Any]) -> str:
+    """把复盘正文渲染成排版好的 HTML（Markdown → HTML，内容先转义）。"""
+    date = html.escape(str(record.get("date") or ""))
+    engine = html.escape(str(record.get("engine") or ""))
+    body = render_markdown(str(record.get("content") or ""))
+    badge = f'<span class="badge">{engine}</span>' if engine else ""
+    head = (
+        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>{date} 当日总结</title><style>{_SUMMARY_CSS}</style></head><body>"
+        '<div class="wrap"><header class="top">'
+        f"<h1>{date} 当日总结{badge}</h1>"
+        '<nav><a href="/">← 返回</a><a href="/summary.md">下载 Markdown</a>'
+        '<a href="/tiers">梯队回测</a></nav></header>'
+    )
+    return (
+        head
+        + f'<article class="md">{body}</article>'
+        + "<footer>数据来自本地每日信号缓存 · 指标只基于日线收盘价</footer>"
+        + "</div></body></html>"
+    )
+
+
+def render_summary_notice(message: str) -> str:
+    """没有总结时的提示页（保持同样的视觉风格）。"""
+    text = html.escape(str(message or ""))
+    return (
+        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>当日总结</title><style>{_SUMMARY_CSS}</style></head><body>"
+        '<div class="wrap"><header class="top"><h1>当日总结</h1>'
+        '<nav><a href="/">← 返回</a><a href="/tiers">梯队回测</a></nav></header>'
+        f'<div class="notice">{text}</div></div></body></html>'
+    )
+
+
 def render_tiers_page(
     result: Dict[str, Any],
     *,
@@ -1771,14 +1883,20 @@ def make_handler(
                 date = str(params.get("date") or "") or (st.latest_summary_date() or "")
                 record = st.get_summary(date) if date else None
                 if not record:
-                    body = (
+                    message = (
                         "当日总结还没生成（默认 %s 之后那次更新时生成，数据更完整）。"
                         % summary_after_cfg
-                    ).encode("utf-8")
+                    )
                     if path.endswith(".md"):
-                        self._send(body, 404, "text/plain; charset=utf-8")
+                        self._send(
+                            message.encode("utf-8"), 404, "text/plain; charset=utf-8"
+                        )
                     else:
-                        self._send(body, 200, "text/plain; charset=utf-8")
+                        self._send(
+                            render_summary_notice(message).encode("utf-8"),
+                            200,
+                            "text/html; charset=utf-8",
+                        )
                     return
                 content = str(record.get("content") or "")
                 if path.endswith(".md"):
@@ -1793,24 +1911,7 @@ def make_handler(
                     self.end_headers()
                     self.wfile.write(raw)
                     return
-                page = (
-                    '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
-                    '<meta name="viewport" content="width=device-width, initial-scale=1">'
-                    "<title>%s 当日总结</title><style>body{background:#0f1115;color:#e8ecf3;"
-                    "font:14px/1.7 -apple-system,'PingFang SC',Arial,sans-serif;"
-                    "margin:0;padding:14px}"
-                    "pre{white-space:pre-wrap;word-break:break-word;background:#171a21;"
-                    "border:1px solid "
-                    "#262b36;border-radius:10px;padding:12px}a{color:#4aa8ff}</style></head><body>"
-                    '<p><a href="/">← 返回</a> · <a href="/summary.md">下载 Markdown</a> · '
-                    '<a href="/tiers">梯队回测</a> · 引擎 %s</p>'
-                    "<pre>%s</pre></body></html>"
-                ) % (
-                    str(record.get("date")),
-                    str(record.get("engine")),
-                    html.escape(content),
-                )
-                self._send(page.encode("utf-8"))
+                self._send(render_summary_page(record).encode("utf-8"))
                 return
 
             view = params.get("view")
