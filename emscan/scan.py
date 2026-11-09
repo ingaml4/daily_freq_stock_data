@@ -74,6 +74,7 @@ DAILY_VOLUME_COLUMNS: tuple = (
     "spot_volume_ratio",
     "vol_signal",
     "vol_score",
+    "valid_bars",
     "s_vol_spike",
 )
 
@@ -192,7 +193,7 @@ def scan(
         mean = window.mean(axis=0, skipna=True)
         # 窗口内有效交易日（非停牌）太少时不给结论：均值建立在 1 天数据上没有意义。
         # 默认要求至少 2 天，这样"停牌几天后复牌放量"仍能被识别（见 scan.min_valid_in_window）。
-        mean = mean.where(count >= min(min_valid_in_window, n))
+        mean = mean.where(count >= (n if n >= 60 else min(min_valid_in_window, n)))
         ratio = today_vol / mean
         res[f"vol_ratio_{n}"] = ratio.replace([np.inf, -np.inf], np.nan)
 
@@ -207,7 +208,7 @@ def scan(
         # 基准期成交量完全一致（例如长期停牌后恢复）时用方向性下限代替除法
         higher = today_vol.to_numpy(dtype=float) > np.expm1(median)
         z = np.where(zero_mad, np.where(higher, 10.0, 0.0), z)
-    res[f"vol_z{baseline_window}"] = z
+    res[f"vol_z{baseline_window}"] = np.where(res["valid_bars"] >= baseline_window, z, np.nan)
 
     # ---- 股票基础信息 & 过滤条件
     if symbols is not None and not symbols.empty:

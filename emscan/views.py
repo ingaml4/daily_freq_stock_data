@@ -63,6 +63,7 @@ def build_view_help(cfg) -> Dict[str, str]:
                 f"成交额 ≥ {round(float(g('scan.min_amount', 0) or 0) / 10000)} 万元，"
                 f"换手率 ≥ {g('scan.min_turnover', 0.5)}%，"
                 f"至少 {g('universe.min_bars', 25)} 根 K 线",
+                "Z60 和 60 日量比要求前 60 个交易日均有有效量，量能样本数单独列示",
                 "剔除 ST / 停牌",
                 f"只显示当日涨幅 ≥ {vol_up}% 的股票（放量下跌、放量滞涨不在此视图）",
             ],
@@ -95,8 +96,7 @@ def build_view_help(cfg) -> Dict[str, str]:
                 f"箱体高度 {float(g('box.min_width', 0.06) or 0.06) * 100:.0f}% ~ "
                 f"{float(g('box.max_width', 0.35) or 0.35) * 100:.0f}%，"
                 f"净涨跌 ≤ ±{float(g('box.max_net_chg', 0.12) or 0.12) * 100:.0f}%",
-                f"|MA5 − MA20| / MA20 ≤ "
-                f"{float(g('box.max_ma_gap', 0.04) or 0.04) * 100:.0f}%",
+                f"|MA5 − MA20| / MA20 ≤ " f"{float(g('box.max_ma_gap', 0.04) or 0.04) * 100:.0f}%",
                 f"日均换手 {g('box.min_avg_turnover', 1.0)}% ~ "
                 f"{g('box.max_avg_turnover', 15.0)}%，"
                 f"换手变异系数 ≤ {g('box.max_turnover_cv', 1.0)}",
@@ -120,8 +120,8 @@ def build_view_help(cfg) -> Dict[str, str]:
                 "涨跌幅 -1.5% ~ 2.0%）",
                 "长下影 +15、十字星 +10、收阳且收在振幅上半部 +10、"
                 "20 日极低位 +10、60 日低位 +10",
-                f"分数 ≥ {g('reversal.min_score', 55)} 且至少有一条量价证据；"
-                "按反转分降序",
+                "各项位置、回撤只在对应窗口样本充足时计入评分",
+                f"分数 ≥ {g('reversal.min_score', 55)} 且至少有一条量价证据；" "按反转分降序",
             ],
         ),
         "low_doji": _help_block(

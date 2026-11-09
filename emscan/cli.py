@@ -31,10 +31,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
-from .box import scan_box
+from .box import box_features
 from .config import Config
 from .demo import synthesize
-from .doji import compute_reversal_features, doji_params
+from .doji import compute_reversal_features
 from .industry import describe as describe_tags
 from .industry import display_map as industry_map
 from .mairui import (
@@ -125,6 +125,7 @@ HITS_COLUMNS = (
 )
 
 HITS_LABELS = {
+    "reversal_bars": "反转样本数",
     "date": "交易日",
     "code": "代码",
     "name": "名称",
@@ -516,7 +517,7 @@ def cmd_scan(cfg: Config, args: argparse.Namespace) -> int:
         store.close()
         return 1
     calendar_days = int(cfg.get("scan.lookback_calendar_days", 140) or 140)
-    bars = store.load_recent_bars(calendar_days=calendar_days, columns=SCAN_COLUMNS)
+    bars = store.load_recent_bars(calendar_days=calendar_days, columns=SCAN_COLUMNS, end=trade_date)
     symbols = store.symbols_df()
     if trade_date not in set(bars["date"].astype(str)):
         log.error(
@@ -560,7 +561,7 @@ def _cache_volume_result(store: Store, result) -> int:
     frame = getattr(result, "all_metrics", None)
     if frame is None or frame.empty:
         return 0
-    return store.upsert_daily_signals(frame.to_dict("records"))
+    return store.upsert_daily_signals(frame.to_dict("records"), replace_columns=frame.columns)
 
 
 def _cache_signal_result(store: Store, result) -> int:
@@ -568,7 +569,7 @@ def _cache_signal_result(store: Store, result) -> int:
     frame = getattr(result, "all_metrics", None)
     if frame is None or frame.empty:
         return 0
-    return store.upsert_daily_signals(frame.to_dict("records"))
+    return store.upsert_daily_signals(frame.to_dict("records"), replace_columns=frame.columns)
 
 
 def cmd_box(cfg: Config, args: argparse.Namespace) -> int:
@@ -586,19 +587,29 @@ def cmd_box(cfg: Config, args: argparse.Namespace) -> int:
         round(window / 20, 1),
         trade_date,
     )
-    hits = scan_box(store, cfg, trade_date=trade_date)
     # 全市场都写缓存（命中的标记 1），方便网页/命令行随时查
-    features = _box_features_for_cache(store, cfg, trade_date)
+    store.prune_inactive_signals(trade_date)
+    features = box_features(store, cfg, trade_date)
+    hits = features[features["s_box_range"] == 1].copy() if not features.empty else features
     if features is not None and not features.empty:
         features["date"] = trade_date
-        written = store.upsert_daily_signals(features.to_dict("records"))
+        written = store.upsert_daily_signals(
+            features.to_dict("records"), replace_columns=features.columns
+        )
         log.info("每日信号缓存已更新：%s 行（箱体特征 + 命中标记）", written)
 
     if hits.empty:
         print(f"箱体做T筛选 | 交易日 {trade_date}\n（没有符合条件的票）")
-        store.record_run("box", trade_date=trade_date, scanned=0, hits=0)
+        write_files(
+            _BoxResult(trade_date, pd.DataFrame(columns=BOX_REPORT_COLUMNS)),
+            cfg,
+            prefix="box",
+            sheet_name="箱体做T",
+        )
+        store.record_run("box", trade_date=trade_date, scanned=len(features), hits=0)
         store.close()
         return 0
+    hits["amount_yi"] = hits["amount"] / 1e8
     hits = hits.sort_values(["box_pos", "box_avg_turnover"], ascending=[True, False])
     hits["trade_date"] = trade_date
     top_n = int(cfg.get("box.top_n", 100) or 100)
@@ -652,43 +663,6 @@ BOX_REPORT_COLUMNS = (
     "box_net_chg",
     "box_days",
 )
-
-
-def _box_features_for_cache(store: Store, cfg: Config, trade_date: str):
-    """全市场箱体特征（不只命中），用来写每日缓存。"""
-    from .box import compute_box_features
-
-    window = int(cfg.get("box.window", 40) or 40)
-    bars = store.load_recent_bars(
-        calendar_days=window * 2 + 20,
-        columns=(
-            "close",
-            "high",
-            "low",
-            "turnover",
-            "amount",
-            "amplitude",
-            "pct_chg",
-            "volume",
-        ),
-    )
-    if bars is None or bars.empty:
-        return None
-    bars = bars[bars["date"].astype(str) <= str(trade_date)]
-    symbols = store.symbols_df()
-    st = []
-    if symbols is not None and not symbols.empty and "is_st" in symbols.columns:
-        st = [str(s) for s in symbols.loc[symbols["is_st"] == 1, "secid"].tolist()]
-    features = compute_box_features(bars, st_secids=st, cfg=cfg, window=window)
-    if features.empty or bars.empty:
-        return features
-    # 顺手把当日行情也带上（这样"只跑 box 没跑 scan"时网页/命令行也有价格可选）
-    latest = bars[bars["date"].astype(str) == str(trade_date)]
-    keep = [c for c in ("close", "pct_chg", "volume", "amount", "turnover") if c in latest.columns]
-    if keep:
-        day = latest[["secid"] + keep].drop_duplicates(subset=["secid"])
-        features = features.merge(day, on="secid", how="left")
-    return features
 
 
 def cmd_industry(cfg: Config, args: argparse.Namespace) -> int:
@@ -840,14 +814,14 @@ def cmd_doji(cfg: Config, args: argparse.Namespace) -> int:
         log.error("本地没有任何行情数据，先执行 backfill 或 run")
         store.close()
         return 1
-    params = doji_params(cfg)
-    log.info("低位缩量十字星筛选：交易日 %s · 口径 %s", trade_date, params)
+    log.info("底部反转评分：交易日 %s", trade_date)
     from .doji import DOJI_BAR_COLUMNS
 
     window = int(cfg.get("reversal.drawdown_window", 120) or 120)
-    bars = store.load_recent_bars(calendar_days=window * 2 + 30, columns=DOJI_BAR_COLUMNS)
-    if bars is not None and not bars.empty:
-        bars = bars[bars["date"].astype(str) <= str(trade_date)]
+    store.prune_inactive_signals(trade_date)
+    bars = store.load_recent_bars(
+        max(window, 60) * 2 + 30, DOJI_BAR_COLUMNS, end=trade_date, require_active=True
+    )
     symbols = store.symbols_df()
     st_ids = (
         [str(x) for x in symbols.loc[symbols["is_st"] == 1, "secid"].tolist()]
@@ -863,13 +837,21 @@ def cmd_doji(cfg: Config, args: argparse.Namespace) -> int:
             features = features.merge(
                 latest[["secid"] + keep].drop_duplicates(subset=["secid"]), on="secid", how="left"
             )
-        written = store.upsert_daily_signals(features.to_dict("records"))
+        written = store.upsert_daily_signals(
+            features.to_dict("records"), replace_columns=features.columns
+        )
         log.info("每日信号缓存已更新：%s 行（反转评分 + 证据）", written)
         hits = features[features["s_reversal"] == 1].copy()
     else:
         hits = features
     if hits is None or hits.empty:
         print(f"低位缩量十字星 | 交易日 {trade_date}\n（没有符合条件的票）")
+        write_files(
+            _BoxResult(trade_date, pd.DataFrame(columns=REVERSAL_REPORT_COLUMNS)),
+            cfg,
+            prefix="doji",
+            sheet_name="底部反转",
+        )
         store.record_run("doji", trade_date=trade_date, hits=0)
         store.close()
         return 0
@@ -884,10 +866,10 @@ def cmd_doji(cfg: Config, args: argparse.Namespace) -> int:
         int(cfg.get("doji.top_n", 100) or 100)
     )
     hits["trade_date"] = trade_date
-    rule_text = "、".join("%s %s" % (k, v) for k, v in params.items())
+    rule_text = f"回撤窗口 {window} 根，60 日位置与长窗口回撤各自要求足额样本"
     summary = (
         f"底部反转信号（评分制）| 交易日 {trade_date}\n"
-        f"命中 {len(hits)} 只 · 按 60 日位置升序（越低越靠前）\n"
+        f"命中 {len(hits)} 只 · 按反转评分降序\n"
         f"口径：{rule_text}"
     )
     print_frame(
@@ -915,6 +897,7 @@ REVERSAL_REPORT_COLUMNS = (
     "pct_chg",
     "amount_yi",
     "rev_score",
+    "reversal_bars",
     "rev_signals",
     "doji_vol_ratio",
     "doji_drawdown",
@@ -953,7 +936,12 @@ def cmd_summary(cfg: Config, args: argparse.Namespace) -> int:
             "17:15 那轮",
         )
     record = generate_summary(
-        store, cfg, trade_date, api_key=api_key, force=bool(getattr(args, "force", False))
+        store,
+        cfg,
+        trade_date,
+        api_key=api_key,
+        force=bool(getattr(args, "force", False)),
+        force_rule=bool(getattr(args, "force_rule", False)),
     )
     if record.get("pending"):
         log.warning("总结本次未生成：%s", record.get("reason"))
@@ -986,8 +974,10 @@ def cmd_signals(cfg: Config, args: argparse.Namespace) -> int:
         store.close()
         return 1
     calendar_days = int(cfg.get("signals.lookback_calendar_days", 30) or 30)
-    bars = store.load_recent_bars(calendar_days=calendar_days, columns=SIGNAL_BAR_COLUMNS)
-    indicators = store.load_indicators(start=shift(trade_date, -calendar_days))
+    bars = store.load_recent_bars(
+        calendar_days=calendar_days, columns=SIGNAL_BAR_COLUMNS, end=trade_date
+    )
+    indicators = store.load_indicators(start=shift(trade_date, -calendar_days), end=trade_date)
     symbols = store.symbols_df()
     log.info(
         "本地指标 %s 行（%s 起），开始筛选 %s",
@@ -1172,6 +1162,15 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
             full_beg=_history_start(cfg),
             progress=_progress("日线"),
         )
+        if trade_date and not _limit(args, cfg):
+            from .history import fill_history
+
+            try:
+                failed = fill_history(store, client, cfg, limit=24, cooldown_days=7)
+                if failed:
+                    log.warning("长窗口日线回补失败 %s 只，下次继续", failed)
+            except Exception as exc:
+                log.warning("长窗口日线回补暂缓：%s", exc)
         if _indicators_due(cfg, args, expected, trade_date):
             sync_indicators(
                 store,

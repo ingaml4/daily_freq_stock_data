@@ -9,14 +9,14 @@ from emscan.cli import main, open_store
 
 
 def _market(last_body=0.0005, last_vol=40000.0, last_low_f=0.98, trend=-0.15, last_pct=0.0):
-    dates = trading_dates(70, end="2026-10-13")
+    dates = trading_dates(125, end="2026-10-13")
     rows = []
     for i, d in enumerate(dates[:-1]):
-        c = 20.0 + trend * i
+        c = 30.0 + trend * i
         it = bar("1.600001", d, 100000.0, close=c)
         it.update(open=c * 1.002, high=c * 1.01, low=c * 0.99, turnover=2.0, amount=5e7)
         rows.append(it)
-    c = 20.0 + trend * (len(dates) - 1)
+    c = 30.0 + trend * (len(dates) - 1)
     last = bar("1.600001", dates[-1], last_vol, close=c)
     last.update(
         open=c * (1 + last_body),

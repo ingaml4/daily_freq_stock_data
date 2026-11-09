@@ -117,7 +117,7 @@ def compute_doji_features(
         for column in DOJI_COLUMNS:
             row.setdefault(column, None)
         # 要求整体历史够长（min_bars），并且窗口里至少 20 根用于判"低位"
-        if len(group) < min_bars or len(tail) < min(20, window):
+        if len(group) < min_bars or len(tail) < window:
             rows.append(row)
             continue
 
@@ -208,10 +208,11 @@ def scan_doji(
 ) -> pd.DataFrame:
     """从库里读最近行情 -> 算十字星特征；默认只返回命中的（带代码/名称/板块）。"""
     conf = cfg.get if cfg is not None else (lambda key, default=None: default)
-    window = int(conf("doji.position_window", 60) or 60)
-    bars = store.load_recent_bars(calendar_days=window * 2 + 30, columns=DOJI_BAR_COLUMNS)
-    if bars is not None and not bars.empty and trade_date:
-        bars = bars[bars["date"].astype(str) <= str(trade_date)]
+    window = int(conf("doji.drawdown_window", 120) or 120)
+    trade_date = trade_date or store.latest_date()
+    bars = store.load_recent_bars(
+        calendar_days=window * 2 + 30, columns=DOJI_BAR_COLUMNS, end=trade_date, require_active=True
+    )
     symbols = store.symbols_df()
     st: List[str] = []
     if symbols is not None and not symbols.empty and "is_st" in symbols.columns:
@@ -279,6 +280,7 @@ def compute_reversal_features(
         row: Dict[str, Any] = {
             "secid": str(secid),
             "s_low_doji": 0,
+            "reversal_bars": len(tail),
             "rev_score": 0.0,
             "rev_signals": "",
             "s_reversal": 0,
@@ -311,11 +313,11 @@ def compute_reversal_features(
         hi_win = float(np.nanmax(tail["high"]))
         lo60 = float(np.nanmin(tail["low"].tail(60)))
         hi60 = float(np.nanmax(tail["high"].tail(60)))
-        p60 = (c - lo60) / (hi60 - lo60) if hi60 > lo60 else None
+        p60 = (c - lo60) / (hi60 - lo60) if len(tail) >= 60 and hi60 > lo60 else None
         lo20 = float(np.nanmin(tail["low"].tail(20)))
         hi20 = float(np.nanmax(tail["high"].tail(20)))
         p20 = (c - lo20) / (hi20 - lo20) if hi20 > lo20 else None
-        drawdown = (c / hi_win - 1.0) if hi_win else None
+        drawdown = (c / hi_win - 1.0) if len(tail) >= win and hi_win else None
         c20 = _f(tail["close"].tail(21).iloc[0]) if len(tail) >= 21 else None
         drop20 = (c / c20 - 1.0) if c20 else None
         prior = tail["volume"].iloc[-(shrink_win + 1) : -1]

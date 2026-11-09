@@ -90,7 +90,9 @@ def compute_frame(bars: pd.DataFrame) -> pd.DataFrame:
         }
     )
     for period in MA_PERIODS:
-        out["ma%d" % period] = close.rolling(period, min_periods=1).mean().to_numpy(dtype=float)
+        out["ma%d" % period] = (
+            close.rolling(period, min_periods=period).mean().to_numpy(dtype=float)
+        )
     return out
 
 
@@ -153,7 +155,7 @@ def compute_and_store(
                         rows[kind].append(payload)
         for kind in kinds:
             if rows[kind]:
-                written += store.upsert_indicators(kind, rows[kind])
+                written += store.upsert_indicators(kind, rows[kind], replace=True)
         if progress:
             progress(min(offset + step, total), total, "本地计算")
     return written

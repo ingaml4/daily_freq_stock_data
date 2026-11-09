@@ -27,7 +27,7 @@ from .mairui import BAR_FIELDS, INDICATOR_MAP
 log = logging.getLogger(__name__)
 
 # 表结构版本号：改 SCHEMA / 迁移逻辑就 +1（init_schema 靠它决定要不要重建）
-SCHEMA_VERSION = 10  # 9: symbol_tags（行业/概念归属）；10: tier_picks（复盘梯队回测）
+SCHEMA_VERSION = 11  # 策略窗口样本数，清理缺少当日有效行情的缓存
 
 DAILY_SIGNALS_VIEW = """CREATE VIEW IF NOT EXISTS daily_signals_named AS
 SELECT
@@ -335,6 +335,8 @@ DAILY_SIGNAL_COLUMNS: tuple = (
     "box_avg_amplitude",
     "box_extreme_days",
     "box_days",
+    "valid_bars",
+    "reversal_bars",
     "doji_body",
     "doji_stop_pos",
     "doji_upper",
@@ -464,14 +466,57 @@ class Store:
         for column in DAILY_SIGNAL_COLUMNS:
             if column in have:
                 continue
-            kind = "INTEGER" if column.startswith("s_") or column == "box_days" else "REAL"
+            kind = (
+                "INTEGER"
+                if column.startswith("s_") or column in ("box_days", "reversal_bars", "valid_bars")
+                else "REAL"
+            )
             if column in ("vol_signal", "computed_at"):
                 kind = "TEXT"
             log.info("行情库升级：daily_signals 表新增列 %s", column)
             self.conn.execute(f"ALTER TABLE daily_signals ADD COLUMN {column} {kind}")
+        self.prune_inactive_signals()
         # 视图要跟着新列走：VIEW 是 SELECT *，但 signals 文本列要重新拼
         self.conn.execute("DROP VIEW IF EXISTS daily_signals_named")
         self.conn.execute(DAILY_SIGNALS_VIEW)
+
+    def prune_inactive_signals(self, day: Optional[str] = None) -> int:
+        """清除目标日缺少有效行情的旧缓存，包括重跑前已撤销的行情。"""
+        sql = (
+            "DELETE FROM daily_signals WHERE NOT EXISTS (SELECT 1 FROM bars b "
+            "WHERE b.secid=daily_signals.secid AND b.date=daily_signals.date "
+            "AND b.volume>0 AND b.close>0)"
+        )
+        with self.conn:
+            count = self.conn.execute(
+                sql + (" AND date=?" if day else ""), (day,) if day else ()
+            ).rowcount
+        if count:
+            self.bump_data_version()
+        return count
+
+    def publication_status(self, summary_date=None):
+        market = self.latest_date()
+        day = summary_date or self.latest_summary_date()
+        record = self.get_summary(day) if day else {}
+        record = record or {}
+        tier = self.conn.execute(
+            "SELECT MAX(date) FROM tier_picks WHERE date<=?", (day or market or "",)
+        ).fetchone()[0]
+        try:
+            digest = json.loads(record.get("digest") or "{}")
+        except (TypeError, ValueError):
+            digest = {}
+        if not isinstance(digest, dict):
+            digest = {}
+        return {
+            "market_date": market,
+            "summary_date": day,
+            "engine": record.get("engine"),
+            "generated_at": record.get("created_at"),
+            "tier_date": tier,
+            "reason": digest.get("_fallback_reason"),
+        }
 
     def close(self) -> None:
         if self._conn is not None:
@@ -515,7 +560,9 @@ class Store:
         self.conn.commit()
         return len(payload)
 
-    def upsert_bars(self, rows: Iterable[Dict[str, Any]], refresh_days: bool = True) -> int:
+    def upsert_bars(
+        self, rows: Iterable[Dict[str, Any]], refresh_days: bool = True, missing_only: bool = False
+    ) -> int:
         payload = []
         for row in rows:
             if not row.get("secid") or not row.get("date"):
@@ -523,11 +570,12 @@ class Store:
             payload.append(_bar_tuple(row))
         if not payload:
             return 0
-        self.conn.executemany(BAR_INSERT, payload)
+        sql = BAR_INSERT.replace("OR REPLACE", "OR IGNORE") if missing_only else BAR_INSERT
+        cur = self.conn.executemany(sql, payload)
         self.conn.commit()
         if refresh_days:
             self.refresh_trading_days()
-        return len(payload)
+        return cur.rowcount
 
     def refresh_trading_days(self) -> int:
         cur = self.conn.execute(
@@ -601,7 +649,8 @@ class Store:
         """写某个交易日的梯队名单（按日期整批覆盖，手工加的 manual 行保留）。"""
         payload = []
         stamp = _now()
-        dates = sorted({str(r.get("date")) for r in rows})
+        rows = list(rows)
+        dates = sorted({str(r.get("date")) for r in rows if r.get("date") and r.get("secid")})
         for row in rows:
             if not row.get("date") or not row.get("secid"):
                 continue
@@ -614,7 +663,7 @@ class Store:
                     str(row.get("name") or ""),
                     str(row.get("reason") or ""),
                     str(row.get("source") or "summary"),
-                    stamp,
+                    str(row.get("generated_at") or stamp),
                 )
             )
         for date in dates:
@@ -658,7 +707,7 @@ class Store:
         return [str(r["date"]) for r in rows]
 
     # ------------------------------------------------------ 每日信号缓存（宽表）
-    def upsert_daily_signals(self, rows: Iterable[Dict[str, Any]]) -> int:
+    def upsert_daily_signals(self, rows: Iterable[Dict[str, Any]], replace_columns=()) -> int:
         """写每日信号缓存：``(secid, date)`` 一行，包含行情/放量/技术指标/信号标记。
 
         放量扫描和指标信号是两个写入者，各自只写自己算出来的列，
@@ -667,7 +716,12 @@ class Store:
         names = ("secid", "date") + DAILY_SIGNAL_COLUMNS
         placeholders = ", ".join("?" for _ in names)
         updates = ", ".join(
-            f"{name} = COALESCE(excluded.{name}, daily_signals.{name})" for name in names[2:]
+            (
+                f"{name} = excluded.{name}"
+                if name in replace_columns
+                else f"{name} = COALESCE(excluded.{name}, daily_signals.{name})"
+            )
+            for name in names[2:]
         )
         sql = (
             f"INSERT INTO daily_signals ({', '.join(names)}) VALUES ({placeholders}) "
@@ -798,7 +852,7 @@ class Store:
         return pd.read_sql_query(sql, self.conn, params=params)
 
     # -------------------------------------------------------- 技术指标写入
-    def upsert_indicators(self, kind: str, rows: Iterable[Dict[str, Any]]) -> int:
+    def upsert_indicators(self, kind: str, rows: Iterable[Dict[str, Any]], replace=False) -> int:
         """写入某一类指标（macd/kdj/boll/ma），只更新这一类对应的列。
 
         用 ``COALESCE(excluded.x, indicators.x)`` 兜住"这次没给值"的情况，
@@ -810,7 +864,12 @@ class Store:
         names = ("secid", "date") + tuple(columns) + ("source",)
         placeholders = ", ".join("?" for _ in names)
         updates = ", ".join(
-            f"{name} = COALESCE(excluded.{name}, indicators.{name})" for name in names[2:]
+            (
+                f"{name} = excluded.{name}"
+                if replace
+                else f"{name} = COALESCE(excluded.{name}, indicators.{name})"
+            )
+            for name in names[2:]
         )
         sql = (
             f"INSERT INTO indicators ({', '.join(names)}) VALUES ({placeholders}) "
@@ -980,19 +1039,28 @@ class Store:
         self,
         calendar_days: int = 140,
         columns: Optional[Sequence[str]] = None,
+        end: Optional[str] = None,
+        require_active: bool = False,
     ) -> pd.DataFrame:
         """加载最近 N 个自然日的 bars。
 
         扫描只需要"列 + 最近 60 个交易日"，所以可以按需裁剪（见 ``columns``）：
         行数少一半、列少三分之一，1GB 内存的小机器也跑得动。
         """
-        latest = self.latest_date()
+        latest = end or self.latest_date()
         if latest is None:
             return self.load_bars(columns=columns).head(0)
         start = (
             dt.datetime.strptime(latest, "%Y-%m-%d") - dt.timedelta(days=int(calendar_days))
         ).strftime("%Y-%m-%d")
-        return self.load_bars(start=start, columns=columns)
+        if require_active:
+            sql = (
+                f"SELECT {self._select_list(columns)} FROM bars WHERE date BETWEEN ? AND ? "
+                "AND volume>0 AND close>0 AND secid IN "
+                "(SELECT secid FROM bars WHERE date=? AND volume>0 AND close>0)"
+            )
+            return pd.read_sql_query(sql, self.conn, params=(start, latest, latest))
+        return self.load_bars(start=start, end=latest, columns=columns)
 
     # 允许外部指定的列（白名单，避免 SQL 注入）
     _BAR_COLUMNS = (

@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from . import billing
 from .backtest import sync_tier_picks, tier_limits
 from .industry import display_map as _industry_map
 from .store import Store
@@ -658,7 +659,12 @@ def _summary_ready(cfg, state: Optional[Dict[str, Any]]) -> tuple:
 
 
 def generate_summary(
-    store: Store, cfg, trade_date: str, api_key: str = "", force: bool = False
+    store: Store,
+    cfg,
+    trade_date: str,
+    api_key: str = "",
+    force: bool = False,
+    force_rule: bool = False,
 ) -> Dict[str, Any]:
     """生成（或复用）当日总结：有密钥走 AI，没有就出规则版。
 
@@ -669,7 +675,7 @@ def generate_summary(
     * **数据指纹**：库里存的 digest 带一个"行数 + 各视图命中数"的指纹，
       数据变了会自动重算；旧版没有指纹的总结会在下一次运行时自动重建。
     """
-    api_key = api_key or str(cfg.get("summary.api_key") or "")
+    api_key = "" if force_rule else api_key or str(cfg.get("summary.api_key") or "")
     state = _signal_state(store, trade_date)
     ready, reason = _summary_ready(cfg, state)
     if not ready and not force:
@@ -684,12 +690,20 @@ def generate_summary(
         }
     fingerprint = str((state or {}).get("fingerprint") or "")
     existing = store.get_summary(str(trade_date))
-    if existing and not force and _stored_fingerprint(existing) == fingerprint:
+    retry_ai = bool(existing and api_key and str(existing.get("engine")).startswith("rule"))
+    if (
+        existing
+        and not force
+        and not retry_ai
+        and (not force_rule or str(existing.get("engine")).startswith("rule"))
+        and _stored_fingerprint(existing) == fingerprint
+    ):
         existing = dict(existing)
         existing["reused"] = True
         return existing
     digest = build_digest(store, cfg, str(trade_date))
     engine = "rule"
+    fallback_reason = "手动选择规则版" if force_rule else "未配置 AI 密钥"
     content = rule_summary(digest)
     if api_key:
         try:
@@ -705,15 +719,36 @@ def generate_summary(
             if ai_text:
                 # 引擎名带上思考档位：网页"当日总结"里一眼能看出这份复盘是不是开了思考
                 content = ai_text
+                if isinstance(store, Store):
+                    billing.record_recovery(store)
                 engine = f"{model}(thinking={_effort(cfg)})" if _thinking(cfg) else model
             else:
+                fallback_reason = "AI 未返回正文"
                 content = rule_summary(digest)
                 engine = f"rule(无正文:{model})"
                 log.warning("AI 没返回正文，本次先用规则版总结（上面有原始响应片段）")
         except Exception as exc:
+            fallback_reason = "AI 请求失败"
+            if isinstance(exc, requests.HTTPError) and exc.response is not None:
+                status = exc.response.status_code
+                fallback_reason = f"DeepSeek HTTP {status}"
+                if status == 402:
+                    fallback_reason += "，请充值"
+                    billing.record_402(store)
             log.error("调用 DeepSeek 失败（本次先出规则版）：%s", exc)
+    if (
+        engine.startswith("rule")
+        and api_key
+        and existing
+        and not force_rule
+        and not str(existing.get("engine") or "rule").startswith("rule")
+    ):
+        log.warning("重试未生成 AI 正文，保留已发布的 AI 复盘及梯队")
+        return dict(existing, reused=True)
     lean = digest_for_store(digest)
     lean["_fingerprint"] = fingerprint
+    if engine.startswith("rule"):
+        lean["_fallback_reason"] = fallback_reason
     record = {
         "date": str(trade_date),
         "engine": engine,

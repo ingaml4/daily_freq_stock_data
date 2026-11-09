@@ -176,19 +176,19 @@ def compute_box_features(
     return pd.DataFrame(rows)
 
 
-def scan_box(
+def box_features(
     store: Store,
     cfg=None,
     trade_date: Optional[str] = None,
-    min_bars: Optional[int] = None,
 ) -> pd.DataFrame:
     """从库里读最近行情 -> 算箱体特征（一只票一行，含未命中的）。"""
     conf = cfg.get if cfg is not None else (lambda key, default=None: default)
     window = int(conf("box.window", DEFAULT_WINDOW) or DEFAULT_WINDOW)
     calendar_days = int(window * 2 + 20)
-    bars = store.load_recent_bars(calendar_days=calendar_days, columns=BOX_BAR_COLUMNS)
-    if bars is not None and not bars.empty and trade_date:
-        bars = bars[bars["date"].astype(str) <= str(trade_date)]
+    trade_date = trade_date or store.latest_date()
+    bars = store.load_recent_bars(
+        calendar_days, BOX_BAR_COLUMNS, end=trade_date, require_active=True
+    )
     symbols = store.symbols_df()
     st_secids: List[str] = []
     if symbols is not None and not symbols.empty and "is_st" in symbols.columns:
@@ -196,11 +196,19 @@ def scan_box(
     features = compute_box_features(bars, st_secids=st_secids, cfg=cfg, window=window)
     if features.empty:
         return features
-    frame = features[features["s_box_range"] == 1].copy()
-    if frame.empty:
-        return frame
-    if symbols is not None and not symbols.empty:
-        meta = symbols.drop_duplicates(subset=["secid"]).set_index("secid")
-        for column in ("code", "name", "board"):
-            frame[column] = meta[column].reindex(frame["secid"]).to_numpy()
-    return frame
+    latest = bars[bars["date"] == trade_date]
+    features = features.merge(
+        latest[["secid", "close", "volume", "amount", "pct_chg", "turnover"]],
+        on="secid",
+        how="inner",
+    )
+    if not symbols.empty:
+        features = features.merge(
+            symbols[["secid", "code", "name", "board"]], on="secid", how="left"
+        )
+    return features
+
+
+def scan_box(store: Store, cfg=None, trade_date=None, min_bars=None) -> pd.DataFrame:
+    features = box_features(store, cfg, trade_date)
+    return features[features["s_box_range"] == 1].copy() if not features.empty else features

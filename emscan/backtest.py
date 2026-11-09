@@ -278,7 +278,14 @@ def sync_tier_picks(
         rows: List[Dict[str, Any]] = []
         for tier, items in parsed["picks"].items():
             for item in items:
-                rows.append({**item, "date": date, "source": "summary"})
+                rows.append(
+                    {
+                        **item,
+                        "date": date,
+                        "source": "summary",
+                        "generated_at": record.get("created_at"),
+                    }
+                )
         if not rows:
             if "TIER" not in content.upper():
                 log.warning(
@@ -401,6 +408,12 @@ def evaluate(store: Store, cfg, picks: Optional[pd.DataFrame] = None) -> Dict[st
             "max_drawdown": None,
             "status": "跟踪中",
         }
+        generated_at = str(item.get("created_at") or "")
+        row["generated_at"] = generated_at
+        if generated_at and generated_at[:10] > date:
+            row["status"] = "事后补生成"
+            rows.append(row)
+            continue
         if index is None:
             row["status"] = "缺行情"  # 本地没有这根K线（退市/长期停牌）
             rows.append(row)
@@ -459,10 +472,11 @@ def evaluate(store: Store, cfg, picks: Optional[pd.DataFrame] = None) -> Dict[st
             row["bench"][horizon] = round(base, 4)
             row["excess"][horizon] = round(ret - base, 4)
 
+    timely = [r for r in rows if r["status"] != "事后补生成"]
     return {
         "rows": rows,
-        "by_tier": _aggregate_by_tier(rows, horizons),
-        "by_date": _aggregate_by_date(rows, horizons),
+        "by_tier": _aggregate_by_tier(timely, horizons),
+        "by_date": _aggregate_by_date(timely, horizons),
         "entry": entry,
         "horizons": horizons,
     }
@@ -550,6 +564,7 @@ def report(store: Store, cfg, days: Optional[int] = None) -> Dict[str, Any]:
         keep = set(store.tier_dates(limit=int(days)))
         picks = picks[picks["date"].astype(str).isin(keep)]
     result = evaluate(store, cfg, picks)
+    result["publication"] = store.publication_status()
     result["unmatched"] = unmatched_picks(store)
     return result
 

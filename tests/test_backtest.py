@@ -136,6 +136,7 @@ def test_evaluate_computes_returns_excess_and_tracking_state(tmp_path):
         [
             {
                 "date": days[0],
+                "generated_at": days[0] + " 17:15:00",
                 "tier": 1,
                 "secid": "0.301591",
                 "code": "301591",
@@ -143,6 +144,7 @@ def test_evaluate_computes_returns_excess_and_tracking_state(tmp_path):
             },
             {
                 "date": days[0],
+                "generated_at": days[0] + " 17:15:00",
                 "tier": 2,
                 "secid": "0.000001",
                 "code": "000001",
@@ -199,8 +201,22 @@ def test_evaluate_close_entry_and_aggregates(tmp_path):
     )
     store.save_tier_picks(
         [
-            {"date": days[2], "tier": 1, "secid": "0.301591", "code": "301591", "name": "肯特股份"},
-            {"date": days[2], "tier": 2, "secid": "1.600519", "code": "600519", "name": "贵州茅台"},
+            {
+                "date": days[2],
+                "generated_at": days[2] + " 17:15:00",
+                "tier": 1,
+                "secid": "0.301591",
+                "code": "301591",
+                "name": "肯特股份",
+            },
+            {
+                "date": days[2],
+                "generated_at": days[2] + " 17:15:00",
+                "tier": 2,
+                "secid": "1.600519",
+                "code": "600519",
+                "name": "贵州茅台",
+            },
         ]
     )
     cfg = make_cfg(tmp_path, {"backtest": {"entry": "close", "horizons": [1, 5]}})

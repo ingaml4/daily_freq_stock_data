@@ -42,6 +42,7 @@ from .store import Store
 from .tzutil import now_hm, today as tz_today
 from .backtest import entry_mode as tiers_entry_mode
 from .backtest import report as tiers_report
+
 # 按钮口径只有一份（emscan/views.py）：网页的悬浮提示与复盘给 AI 的口径说明共用
 # build_view_help 保留在这里只为兼容旧的 `from emscan.web import build_view_help`
 from .views import build_view_help, plain_help  # noqa: F401
@@ -318,9 +319,7 @@ def render_top_tabs(active: str) -> str:
     return '<nav class="tabs top-tabs">' + "".join(links) + "</nav>"
 
 
-def render_view_tabs(
-    view: str, date: str = "", help_map: Optional[Dict[str, str]] = None
-) -> str:
+def render_view_tabs(view: str, date: str = "", help_map: Optional[Dict[str, str]] = None) -> str:
     """信号页的二级标签：六个信号视图（放量/金叉/布林/反转/箱体）。"""
     help_map = help_map or {}
     links = []
@@ -338,7 +337,8 @@ def render_view_tabs(
 # 每个按钮的表格列：基础信息 + 该按钮相关的指标（不再所有视图共用一张大表）
 BASE_COLUMNS = ("code", "name", "board", "industry", "close", "pct_chg", "amount_yi", "turnover")
 VIEW_COLUMNS: Dict[str, tuple] = {
-    "vol_spike": BASE_COLUMNS + ("vol_ratio_5", "vol_ratio_20", "vol_z60", "vol_signal"),
+    "vol_spike": BASE_COLUMNS
+    + ("vol_ratio_5", "vol_ratio_20", "vol_z60", "valid_bars", "vol_signal"),
     "macd_golden": BASE_COLUMNS + ("macd_diff", "macd_dea", "macd_bar"),
     "kdj_golden": BASE_COLUMNS + ("kdj_k", "kdj_d", "kdj_j"),
     "boll_break_lower": BASE_COLUMNS + ("boll_pos", "boll_lower", "boll_mid", "boll_upper"),
@@ -359,6 +359,7 @@ VIEW_COLUMNS: Dict[str, tuple] = {
         "doji_stop_pos",
         "doji_body",
         "doji_lower",
+        "reversal_bars",
         "rev_signals",  # 证据放最后一列（内容长，别挤在中间）
     ),
 }
@@ -375,6 +376,8 @@ COLUMNS: Tuple[Tuple[str, str, Optional[str], bool], ...] = (
     ("turnover", "换手率%", "{:.2f}", True),
     ("vol_ratio_5", "量比5", "{:.2f}", True),
     ("vol_ratio_20", "量比20", "{:.2f}", True),
+    ("valid_bars", "量能样本数", "{:.0f}", False),
+    ("reversal_bars", "反转样本数", "{:.0f}", False),
     ("vol_z60", "Z60", "{:.1f}", True),
     ("boll_pos", "布林位置", "{:.2f}", True),
     ("boll_lower", "布林下轨", "{:.2f}", True),
@@ -1500,6 +1503,27 @@ footer{
 """
 
 
+def publication_note(status):
+    if not status:
+        return ""
+    esc = lambda value: html.escape(str(value or "暂无"))
+    engine = str(status.get("engine") or "")
+    source = "规则版" if engine.startswith("rule") else engine
+    parts = [
+        f"最新行情 {esc(status.get('market_date'))}",
+        f"复盘日期 {esc(status.get('summary_date'))}",
+        f"复盘来源 {esc(source)}",
+        f"生成时间 {esc(status.get('generated_at'))}",
+        f"最近梯队 {esc(status.get('tier_date'))}",
+    ]
+    if status.get("tier_date") != status.get("summary_date"):
+        reason = status.get("reason") or (
+            "规则版未生成 AI 梯队" if engine.startswith("rule") else "未收录名单"
+        )
+        parts.append("本日缺榜：" + esc(reason))
+    return '<p class="hint">' + " · ".join(parts) + "</p>"
+
+
 def render_summary_page(record: Dict[str, Any]) -> str:
     """把复盘正文渲染成排版好的 HTML（Markdown → HTML，内容先转义）。"""
     date = html.escape(str(record.get("date") or ""))
@@ -1519,6 +1543,7 @@ def render_summary_page(record: Dict[str, Any]) -> str:
     )
     return (
         head
+        + publication_note(record.get("publication"))
         + f'<article class="md">{body}</article>'
         + "<footer>数据来自本地每日信号缓存 · 指标只基于日线收盘价</footer>"
         + "</div></body></html>"
@@ -1572,6 +1597,7 @@ def render_tiers_page(
         "「跟踪中」= 持有期还没走完，不拿没发生的数据充数。</p>"
     )
 
+    hint = publication_note(result.get("publication")) + hint
     rows = result.get("rows") or []
     if not rows:
         body = (
@@ -1582,9 +1608,11 @@ def render_tiers_page(
         return _tiers_page_shell(title, toolbar, hint + body, "")
 
     # ① 按梯队汇总（这正是"哪个梯队真有用"的答案）
-    head = '<tr><th class="l">梯队</th><th>样本</th>' + "".join(
-        f"<th>{h}日 均值</th><th>胜率</th><th>超额</th>" for h in horizons
-    ) + "<th>最大回撤均值</th><th>期间最大涨幅均值</th></tr>"
+    head = (
+        '<tr><th class="l">梯队</th><th>样本</th>'
+        + "".join(f"<th>{h}日 均值</th><th>胜率</th><th>超额</th>" for h in horizons)
+        + "<th>最大回撤均值</th><th>期间最大涨幅均值</th></tr>"
+    )
     lines = []
     for item in (result.get("by_tier") or {}).values():
         tier_cls = int(item["tier"]) if int(item["tier"]) in (1, 2) else 2
@@ -1607,9 +1635,11 @@ def render_tiers_page(
     by_tier_table = f'<div class="wrap"><table>{head}{"".join(lines)}</table></div>'
 
     # ② 按名单日
-    head = '<tr><th class="l">名单日</th><th class="l">梯队</th><th>只数</th>' + "".join(
-        f"<th>{h}日 均值</th><th>{h}日 超额</th>" for h in horizons
-    ) + "<th>状态</th></tr>"
+    head = (
+        '<tr><th class="l">名单日</th><th class="l">梯队</th><th>只数</th>'
+        + "".join(f"<th>{h}日 均值</th><th>{h}日 超额</th>" for h in horizons)
+        + "<th>状态</th></tr>"
+    )
     lines = []
     for item in result.get("by_date") or []:
         cells = [
@@ -1654,7 +1684,7 @@ def render_tiers_page(
         cells.append(f'<td>{_pct(row.get("max_drawdown"), 1)}</td>')
         status = str(row.get("status") or "")
         cells.append(
-            f'<td class="{"muted" if status != "已完成" else ""}">{html.escape(status)}</td>'
+            f'<td class="{"muted" if status != "已完成" else ""}">{html.escape(status)} {html.escape(str(row.get("generated_at") or "")) if status == "事后补生成" else ""}</td>'
         )
         lines.append("<tr>" + "".join(cells) + "</tr>")
     detail_table = f'<div class="wrap"><table>{head}{"".join(lines)}</table></div>'
@@ -1688,7 +1718,7 @@ def render_tiers_page(
 
 def _tiers_page_shell(title: str, toolbar: str, body: str, _extra: str = "") -> str:
     head = (
-        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>梯队回测 · {html.escape(title)}</title>"
         f"<style>{TIERS_CSS}{TABS_CSS}{LAYOUT_CSS}</style></head><body>"
@@ -1698,8 +1728,7 @@ def _tiers_page_shell(title: str, toolbar: str, body: str, _extra: str = "") -> 
         + "</div></header>"
     )
     return (
-        head
-        + f'<div class="page">{toolbar}</div><main class="page">{body}</main>'
+        head + f'<div class="page">{toolbar}</div><main class="page">{body}</main>'
         '<footer class="page">代码点击跳转雪球行情 · 收益均按交易日计算 · '
         "「跟踪中」表示持有期未走完，数字会随后续行情更新</footer>"
         "</body></html>"
@@ -1938,6 +1967,7 @@ def make_handler(
                         "code",
                         "name",
                         "industry",
+                        "generated_at",
                         "entry_date",
                         "entry",
                         "close_t",
@@ -1980,9 +2010,7 @@ def make_handler(
                         % summary_after_cfg
                     )
                     if path.endswith(".md"):
-                        self._send(
-                            message.encode("utf-8"), 404, "text/plain; charset=utf-8"
-                        )
+                        self._send(message.encode("utf-8"), 404, "text/plain; charset=utf-8")
                     else:
                         self._send(
                             render_summary_notice(message).encode("utf-8"),
@@ -2003,6 +2031,7 @@ def make_handler(
                     self.end_headers()
                     self.wfile.write(raw)
                     return
+                record["publication"] = st.publication_status(date)
                 self._send(render_summary_page(record).encode("utf-8"))
                 return
 
