@@ -34,7 +34,7 @@ import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, List, Optional, Tuple
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import urlencode, parse_qs, quote, urlparse
 
 from .mairui import BOARD_LABELS
 from .markdown_render import render_markdown
@@ -351,6 +351,7 @@ VIEW_COLUMNS: Dict[str, tuple] = {
         "box_low",
         "box_avg_turnover",
         "box_avg_amplitude",
+        "ma5", "ma10", "ma20", "ma60",
     ),
     "reversal": BASE_COLUMNS
     + (
@@ -372,6 +373,10 @@ COLUMNS: Tuple[Tuple[str, str, Optional[str], bool], ...] = (
     ("board", "板块", None, True),
     ("industry", "行业", None, True),
     ("close", "收盘价", "{:.2f}", True),
+    ("ma5", "MA5", "{:.3f}", True),
+    ("ma10", "MA10", "{:.3f}", True),
+    ("ma20", "MA20", "{:.3f}", True),
+    ("ma60", "MA60", "{:.3f}", True),
     ("pct_chg", "涨跌幅%", "{:+.2f}", True),
     ("amount_yi", "成交额(亿)", "{:.2f}", True),
     ("turnover", "换手率%", "{:.2f}", True),
@@ -1733,7 +1738,7 @@ def render_tiers_page(
         '<tr><th class="l">名单日</th><th class="l">梯队</th><th class="l">代码</th>'
         '<th class="l">名称</th><th class="l">行业</th><th>买入价</th>'
         + "".join(f"<th>{h}日</th>" for h in horizons)
-        + "<th>超额(1日)</th><th>最高价相对参考入场</th><th>最低价相对参考入场</th><th>状态</th></tr>"
+        + "<th>超额(1日)</th><th>最高价相对参考入场</th><th>最低价相对参考入场</th><th>状态</th><th>入池依据</th></tr>"
     )
     lines = []
     for row in rows:
@@ -1759,6 +1764,11 @@ def render_tiers_page(
         cells.append(
             f'<td class="{"muted" if status != "已完成" else ""}">{html.escape(status)} {html.escape(str(row.get("generated_at") or "")) if status == "事后补生成" else ""}</td>'
         )
+        if row.get("source") == "summary":
+            reason_url = "/api/tier-reasons?" + urlencode({"date": row["date"], "symbols": secid})
+            cells.append(f'<td><a href="{html.escape(reason_url, quote=True)}">查看原文依据</a></td>')
+        else:
+            cells.append("<td>手工记录</td>")
         lines.append("<tr>" + "".join(cells) + "</tr>")
     detail_table = f'<div class="wrap"><table>{head}{"".join(lines)}</table></div>'
 
