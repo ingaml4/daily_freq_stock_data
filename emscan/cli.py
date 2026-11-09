@@ -1163,7 +1163,13 @@ def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
             progress=_progress("日线"),
         )
         if trade_date and not _limit(args, cfg):
+            from .benchmarks import sync_benchmarks
             from .history import fill_history
+
+            try:
+                sync_benchmarks(store, client, shift(trade_date, -45), trade_date)
+            except Exception as exc:
+                log.warning("基准指数同步暂缓（%s），继续个股盘后任务", type(exc).__name__)
 
             try:
                 failed = fill_history(store, client, cfg, limit=24, cooldown_days=7)

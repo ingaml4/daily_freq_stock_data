@@ -796,6 +796,13 @@ class MairuiClient:
         raise MairuiError(f"请求 {url} 失败：{last_error}")
 
     # ------------------------------------------------------------- 股票列表
+    def fetch_benchmark_daily(self, dm: str, start: str, end: str, *, latest: bool = False):
+        """指数专用日线接口。必须明确传入带交易所后缀的指数代码。"""
+        mode = "latest" if latest else "history"
+        url = self._url(f"/hsindex/{mode}/{dm}/d/{self._require_licence()}")
+        params = None if latest else {"st": _date_param(start), "et": _date_param(end)}
+        return _as_items(self._get_json(url, params))
+
     def fetch_universe(self) -> List[Dict[str, Any]]:
         """拉取《股票列表》（沪深 A 股代码 + 名称）。"""
         licence = self._require_licence()

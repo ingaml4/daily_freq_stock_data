@@ -27,7 +27,7 @@ from .mairui import BAR_FIELDS, INDICATOR_MAP
 log = logging.getLogger(__name__)
 
 # 表结构版本号：改 SCHEMA / 迁移逻辑就 +1（init_schema 靠它决定要不要重建）
-SCHEMA_VERSION = 11  # 策略窗口样本数，清理缺少当日有效行情的缓存
+SCHEMA_VERSION = 12  # 独立存放基准指数日线，证券代码可能与个股相同
 
 DAILY_SIGNALS_VIEW = """CREATE VIEW IF NOT EXISTS daily_signals_named AS
 SELECT
@@ -64,6 +64,16 @@ CREATE TABLE IF NOT EXISTS symbols (
     float_shares REAL,
     listed_date  TEXT,
     updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS benchmark_bars (
+    code       TEXT NOT NULL,
+    date       TEXT NOT NULL,
+    close      REAL NOT NULL CHECK(close > 0),
+    prev_close REAL NOT NULL CHECK(prev_close > 0),
+    pct_chg    REAL NOT NULL,
+    source     TEXT NOT NULL,
+    PRIMARY KEY (code, date)
 );
 
 CREATE TABLE IF NOT EXISTS bars (
