@@ -143,6 +143,7 @@ def test_plain_invalid_certificate_is_not_json_success(local_api):
     assert len(hits) == 1
     assert request_usage.snapshot()["totals"]["json_successes"] == 0
 
+
 @pytest.mark.parametrize(
     "status,body,code",
     [

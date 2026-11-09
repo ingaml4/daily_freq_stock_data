@@ -342,7 +342,9 @@ def test_render_html_has_nav_sortable_headers_and_xueqiu_links(tmp_path):
     _, store, date = _seed(tmp_path)
     ctx = build_context(store, view="vol_spike", date=date)
     page = render_html(ctx, title="A股日频信号")
-    single_schedule = render_html(build_context(store, view="vol_spike", date=date, update_times="17:15"))
+    single_schedule = render_html(
+        build_context(store, view="vol_spike", date=date, update_times="17:15")
+    )
     assert "17:15" in single_schedule and "15:32" not in single_schedule
     store.close()
     # 信号页的二级标签（所有视图）都在

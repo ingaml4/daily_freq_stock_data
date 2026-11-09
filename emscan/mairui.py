@@ -933,7 +933,9 @@ class MairuiClient:
                     last_error += f" / 接口错误码 {code}"
                 if code in _CREDENTIAL_CODES:
                     self._block(
-                        route, "credential", f"{route} 失败：{last_error}，{_CREDENTIAL_CODES[code]}"
+                        route,
+                        "credential",
+                        f"{route} 失败：{last_error}，{_CREDENTIAL_CODES[code]}",
                     )
                 if code == "103":
                     leader = self._start_ip_window()
