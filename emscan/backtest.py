@@ -311,6 +311,9 @@ def sync_tier_picks(
                 for it in stats["unmatched"][:6]
             ),
         )
+    from .tier_reasons import backfill
+
+    backfill(store, targets)
     store.set_meta("tier_unmatched", json.dumps(stats["unmatched"][-30:], ensure_ascii=False))
     return stats
 

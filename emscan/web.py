@@ -2022,6 +2022,30 @@ def make_handler(
                            ctype="application/json; charset=utf-8")
                 return
 
+            if path in ("/api/tier-reasons", "/api/tier-reasons/source"):
+                from . import tier_reasons
+                from .watchlist_risk import InvalidRequest
+
+                status = 200
+                try:
+                    with store_factory() as st:
+                        if path.endswith("/source"):
+                            result = tier_reasons.source_document(
+                                st.conn, params.get("date"), params.get("version")
+                            )
+                            if result is None:
+                                status, result = 404, {"error": "unknown_source_version"}
+                        else:
+                            result = tier_reasons.report(st.conn, params.get("date"), params.get("symbols"))
+                except InvalidRequest as exc:
+                    status, result = 400, {"error": str(exc)}
+                except Exception:
+                    log.exception("入池依据读取失败")
+                    status, result = 500, {"error": "tier reasons unavailable"}
+                self._send(json.dumps(result, ensure_ascii=False).encode("utf-8"), status,
+                           "application/json; charset=utf-8")
+                return
+
             if path == "/api/watchlist-risk":
                 from .watchlist_risk import InvalidRequest, risk_report
 

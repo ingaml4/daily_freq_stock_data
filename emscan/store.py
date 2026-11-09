@@ -27,7 +27,7 @@ from .mairui import BAR_FIELDS, INDICATOR_MAP
 log = logging.getLogger(__name__)
 
 # 表结构版本号：改 SCHEMA / 迁移逻辑就 +1（init_schema 靠它决定要不要重建）
-SCHEMA_VERSION = 12  # 独立存放基准指数日线，证券代码可能与个股相同
+SCHEMA_VERSION = 13  # 复盘原文版本和逐股入池依据
 
 DAILY_SIGNALS_VIEW = """CREATE VIEW IF NOT EXISTS daily_signals_named AS
 SELECT
@@ -218,6 +218,16 @@ CREATE TABLE IF NOT EXISTS daily_summary (
 );
 
 -- 键值小表：目前存"数据版本"计数器（网页端靠它判断页面缓存是否过期）
+CREATE TABLE IF NOT EXISTS tier_reason_sources (
+    date TEXT NOT NULL, version TEXT NOT NULL, content_sha256 TEXT NOT NULL,
+    engine TEXT NOT NULL, first_published_at TEXT, content TEXT NOT NULL,
+    PRIMARY KEY(date,version)
+);
+CREATE TABLE IF NOT EXISTS tier_reason_entries (
+    date TEXT NOT NULL, version TEXT NOT NULL, secid TEXT NOT NULL, tier INTEGER NOT NULL,
+    name TEXT NOT NULL, membership_origin TEXT NOT NULL, reasons_json TEXT NOT NULL,
+    PRIMARY KEY(date,version,secid,tier)
+);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -809,18 +819,21 @@ class Store:
         return None
 
     def save_summary(self, record: Dict[str, Any]) -> None:
-        self.conn.execute(
-            "INSERT OR REPLACE INTO daily_summary (date, created_at, engine, content, digest) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (
-                str(record.get("date")),
-                _now(),
-                str(record.get("engine") or ""),
-                str(record.get("content") or ""),
-                str(record.get("digest") or ""),
-            ),
-        )
-        self.conn.commit()
+        from .tier_reasons import archive_source
+
+        day = str(record["date"])
+        stamp = _now()
+        with self.conn:
+            previous = self.get_summary(day)
+            if previous:
+                archive_source(self.conn, previous)
+            self.conn.execute(
+                "INSERT OR REPLACE INTO daily_summary (date, created_at, engine, content, digest) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (day, stamp, str(record.get("engine") or ""), str(record.get("content") or ""),
+                 str(record.get("digest") or "")),
+            )
+            archive_source(self.conn, dict(record, date=day, created_at=stamp))
         self.bump_data_version()
 
     def get_summary(self, date: str) -> Optional[Dict[str, Any]]:
