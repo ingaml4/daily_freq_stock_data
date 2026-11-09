@@ -484,13 +484,6 @@ DEFAULT_PAGE_SIZE = 20
 # 系统每个交易日自动更新数据的时刻（北京时间）—— 默认值与 install_services.sh 的 --daily-times 一致
 DEFAULT_UPDATE_TIMES = "15:32,17:15"
 
-# 两趟各做一半：15:32 收盘快照 + 放量扫描；17:15 技术指标（麦蕊 15:35 才发布）+ 金叉/布林信号
-UPDATE_SCHEDULE_NOTE = (
-    "系统每个交易日（北京时间，周一至周五）自动更新两次："
-    "15:32 收盘行情 + 放量扫描；17:15 技术指标 + 金叉/布林信号。非交易日不更新。"
-)
-
-
 def parse_update_times(raw: str = "") -> List[str]:
     out: List[str] = []
     for part in str(raw or DEFAULT_UPDATE_TIMES).replace("，", ",").split(","):
@@ -1306,7 +1299,7 @@ def render_html(
             f'{html.escape(str(ctx.date or "-"))} 的缓存</div>'
             f'<div class="banner-body">{html.escape(ctx.today)} 还没有数据。'
             f"{html.escape(ctx.stale_reason)}</div>"
-            f'<div class="banner-note">{html.escape(UPDATE_SCHEDULE_NOTE)}</div>'
+            f'<div class="banner-note">{html.escape(ctx.update_note or format_update_note())}</div>'
             "</div>"
         )
     elif not ctx.error:
@@ -1314,7 +1307,7 @@ def render_html(
             '<div class="banner ok">'
             f'<div class="banner-title">✔ 数据就是今天的（{html.escape(str(ctx.date or "-"))}）'
             f"，缓存写入 {html.escape(written)}</div>"
-            f'<div class="banner-note">{html.escape(UPDATE_SCHEDULE_NOTE)}</div>'
+            f'<div class="banner-note">{html.escape(ctx.update_note or format_update_note())}</div>'
             "</div>"
         )
     body = (

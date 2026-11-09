@@ -342,6 +342,8 @@ def test_render_html_has_nav_sortable_headers_and_xueqiu_links(tmp_path):
     _, store, date = _seed(tmp_path)
     ctx = build_context(store, view="vol_spike", date=date)
     page = render_html(ctx, title="A股日频信号")
+    single_schedule = render_html(build_context(store, view="vol_spike", date=date, update_times="17:15"))
+    assert "17:15" in single_schedule and "15:32" not in single_schedule
     store.close()
     # 信号页的二级标签（所有视图）都在
     for spec in VIEWS.values():
@@ -627,7 +629,7 @@ def test_page_shows_latest_day_and_staleness_banner(tmp_path):
     assert "数据不是当天的" in stale and date in stale
     assert "2026-10-14 还没有数据" in stale
     assert "下一个更新点" in stale or "大概率不是交易日" in stale
-    assert "系统每个交易日" in stale
+    assert "系统更新（北京时间）：交易日 15:32、17:15" in stale
     # 空库也要有交代
     store.conn.execute("DELETE FROM daily_signals")
     store.conn.commit()
