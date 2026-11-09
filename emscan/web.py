@@ -1516,7 +1516,10 @@ def publication_note(status):
         f"生成时间 {esc(status.get('generated_at'))}",
         f"最近梯队 {esc(status.get('tier_date'))}",
     ]
-    if status.get("tier_date") != status.get("summary_date"):
+    day = status.get("summary_date")
+    if day and str(status.get("generated_at") or "")[:10] > day:
+        parts.append("事后补生成，梯队仅供回看")
+    if status.get("tier_date") != day:
         reason = status.get("reason") or (
             "规则版未生成 AI 梯队" if engine.startswith("rule") else "未收录名单"
         )
@@ -1537,7 +1540,7 @@ def render_summary_page(record: Dict[str, Any]) -> str:
         f"<style>{_SUMMARY_CSS}{TABS_CSS}{LAYOUT_CSS}</style></head><body>"
         '<div class="page"><header class="top">'
         f"<h1>{date} 当日总结{badge}</h1>"
-        '<div class="actions"><a href="/summary.md" download>下载 Markdown</a></div>'
+        f'<div class="actions"><a href="/summary.md?date={date}" download>下载 Markdown</a></div>'
         + render_top_tabs("summary")
         + "</header>"
     )

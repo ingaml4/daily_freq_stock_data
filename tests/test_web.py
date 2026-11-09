@@ -521,7 +521,7 @@ def test_summary_buttons_and_text_extraction(tmp_path):
     summary = render_summary_page(
         {"date": date, "engine": "rule", "content": "## 标题\n\n正文"}
     )
-    assert "下载 Markdown" in summary and "/summary.md" in summary
+    assert "下载 Markdown" in summary and f"/summary.md?date={date}" in summary
 
 
 def test_top_tabs_and_signal_subtabs(tmp_path):
