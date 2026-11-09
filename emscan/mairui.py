@@ -177,9 +177,46 @@ class MairuiQuotaError(MairuiError):
         self.scope = scope
 
 
-def _quota_scope(status, problem):
+# https://www.mairui.club/faq，业务码来自响应正文，独立于 HTTP 状态。
+_CREDENTIAL_CODES = {"101": "已超过当日请求配额，次日恢复", "102": "证书无效"}
+_IP_WINDOW_SECONDS = 60
+_IP_LIMIT = "麦蕊业务码 103：同证书出口 IP 超限，暂缓跨端点请求 60 秒"
+
+
+def _is_error_envelope(payload):
+    return (
+        isinstance(payload, dict)
+        and "code" in payload
+        and payload.keys()
+        <= {"code", "msg", "message", "status", "data", "timestamp", "path", "success"}
+        and payload.get("data") in (None, [], {})
+        and payload.get("success") is not True
+    )
+
+
+def _response_code(payload):
+    if isinstance(payload, dict):
+        # 股票记录也可能有 code。仅接受独立的错误码或带错误消息的响应。
+        if not _is_error_envelope(payload):
+            return None
+        value = payload.get("code")
+    else:
+        value = payload
+    if type(value) not in (int, str):
+        return None
+    code = str(value).strip()
+    if code not in ("101", "102", "103") and not error_message(payload):
+        return None
+    return code if code.isascii() and code.isdigit() and len(code) <= 5 else None
+
+
+def _quota_scope(status, problem, *, exact=False):
     # 供应商有时以 200 + 业务错误返回全局额度/证书故障。只按明确标志区分。
-    detail = (problem or "").lower()
+    detail = (problem or "").strip().lower()
+
+    def matches(markers):
+        return detail in markers if exact else any(marker in detail for marker in markers)
+
     global_markers = (
         "无效证书",
         "证书无效",
@@ -199,11 +236,10 @@ def _quota_scope(status, problem):
         "quota exhausted",
         "insufficient credits",
     )
-    if status == 401 or any(marker in detail for marker in global_markers):
+    if status == 401 or matches(global_markers):
         return "credential"
-    if status == 403 or any(
-        marker in detail
-        for marker in (
+    if status == 403 or matches(
+        (
             "无权访问",
             "无权限",
             "权限不足",
@@ -222,7 +258,7 @@ def _completed(futures, mixed_endpoints=False):
     for future in as_completed(futures):
         error = future.exception()
         if isinstance(error, MairuiQuotaError) and (
-            error.scope == "credential" or not mixed_endpoints
+            error.scope in ("credential", "ip_window") or not mixed_endpoints
         ):
             for pending in futures:
                 pending.cancel()
@@ -347,7 +383,7 @@ def _as_items(payload: Any) -> List[Dict[str, Any]]:
 
 def error_message(payload: Any) -> Optional[str]:
     """识别 ``{"code":503,"message":"upstream unavailable"}`` 这类错误体。"""
-    if isinstance(payload, dict):
+    if _is_error_envelope(payload):
         code = payload.get("code")
         message = payload.get("message") or payload.get("msg")
         if message is not None and code is not None:
@@ -802,6 +838,7 @@ class MairuiClient:
         self._count_lock = threading.Lock()
         self._block_lock = threading.Lock()
         self._blocked_routes = {}
+        self._ip_retry_at = 0.0
 
         self.session.headers.update(DEFAULT_HEADERS)
         self.request_count = 0
@@ -838,11 +875,25 @@ class MairuiClient:
         with self._block_lock:
             credential = self._blocked_routes.get("*")
             endpoint = self._blocked_routes.get(route)
+            ip_window_active = self._ip_retry_at > time.monotonic()
         if credential or endpoint:
             request_usage.count(route, "circuit_skips")
             raise MairuiQuotaError(
                 credential or endpoint, "credential" if credential else "endpoint"
             )
+
+        if ip_window_active:
+            request_usage.count(route, "circuit_skips")
+            raise MairuiQuotaError(_IP_LIMIT, "ip_window")
+
+    def _start_ip_window(self):
+        # 同时在途的其他请求收到 103 时沿用已有窗口，仅首个请求可以等待并重试。
+        with self._block_lock:
+            now = time.monotonic()
+            if now < self._ip_retry_at:
+                return False
+            self._ip_retry_at = now + _IP_WINDOW_SECONDS
+            return True
 
     def _block(self, route, scope, message):
         with self._block_lock:
@@ -853,18 +904,22 @@ class MairuiClient:
         """GET 一个 JSON 接口；失败按指数退避重试。"""
         route = request_usage.endpoint(url, self.base_url)
         request_usage.count(route, "logical_calls")
-        last_error = "unknown"
+        retried_ip_window = False
         for attempt in range(self.retries + 1):
             self._check_block(route)
             self.limiter.acquire()
             self._check_block(route)
-            status, problem = None, None
+            status, code, problem = None, None, None
             try:
                 with request_usage.call(route, retry=attempt > 0):
                     # 调用方注入的 Session 可自定义传输层，无法证明其内部 HTTP 次数，单列。
                     if not self._metered_session:
                         request_usage.count(route, "external_gets")
                     resp = self.session.get(url, params=params, timeout=self.timeout)
+            except Exception as exc:
+                # requests 的异常通常含完整 URL，不能把证书复制进日志或异常链。
+                last_error = type(exc).__name__
+            else:
                 with self._count_lock:
                     self.request_count += 1  # 保留原字段：收到响应的 GET 次数
                 status = resp.status_code
@@ -872,27 +927,33 @@ class MairuiClient:
                     payload: Any = resp.json()
                 except ValueError:
                     payload = None
+                code = _response_code(payload)
+                last_error = f"HTTP {status}"
+                if code:
+                    last_error += f" / 接口错误码 {code}"
+                if code in _CREDENTIAL_CODES:
+                    self._block(
+                        route, "credential", f"{route} 失败：{last_error}，{_CREDENTIAL_CODES[code]}"
+                    )
+                if code == "103":
+                    leader = self._start_ip_window()
+                    if leader and not retried_ip_window and attempt < self.retries:
+                        retried_ip_window = True
+                        time.sleep(_IP_WINDOW_SECONDS)
+                        continue
+                    raise MairuiQuotaError(_IP_LIMIT, "ip_window")
+
                 problem = error_message(payload)
-                if not problem and isinstance(payload, str) and _quota_scope(200, payload):
-                    problem = payload
-                elif payload is None:
-                    problem = resp.text[:512]
-                provider_code = str(payload.get("code", "")) if isinstance(payload, dict) else ""
-                if status == 200 and payload is not None and not problem:
+                text = resp.text[:512] if payload is None else payload
+                if isinstance(text, str) and _quota_scope(None, text, exact=True):
+                    problem = text
+                if status == 200 and payload is not None and not problem and not code:
                     request_usage.count(route, "json_successes")
                     if self.sleep:
                         time.sleep(self.sleep * random.random())
                     return payload
-                last_error = f"HTTP {status}"
-                if problem and provider_code.isdigit() and len(provider_code) <= 5:
-                    last_error += f" / 接口错误码 {provider_code}"
-                    if status == 200:
-                        status = int(provider_code)
-                elif payload is None:
+                if payload is None:
                     last_error += "（响应不是 JSON）"
-            except Exception as exc:
-                # requests 的异常通常含完整 URL，不能把证书复制进日志或异常链。
-                last_error = type(exc).__name__
             scope = _quota_scope(status, problem)
             if scope:
                 self._block(route, scope, f"{route} 失败：{last_error}")
@@ -902,7 +963,7 @@ class MairuiClient:
                 backoff = min(0.5 * (2**attempt), 5.0) + random.random() * 0.2
                 log.debug("%s 请求失败（%s），%.1fs 后重试", route, last_error, backoff)
                 time.sleep(backoff)
-        if status == 429:
+        if status == 429 or code == "429":
             self._block(route, "endpoint", f"{route} 持续限流：{last_error}")
         raise MairuiError(f"{route} 失败：{last_error}")
 

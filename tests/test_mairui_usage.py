@@ -142,3 +142,95 @@ def test_plain_invalid_certificate_is_not_json_success(local_api):
         client.fetch_universe()
     assert len(hits) == 1
     assert request_usage.snapshot()["totals"]["json_successes"] == 0
+
+@pytest.mark.parametrize(
+    "status,body,code",
+    [
+        (200, 101, "101"),
+        (429, "101", "101"),
+        (200, {"code": 101}, "101"),
+        (503, {"code": "101", "msg": "daily"}, "101"),
+        (429, 102, "102"),
+        (200, "102", "102"),
+        (200, {"code": "102"}, "102"),
+        (429, {"code": 102, "message": "invalid"}, "102"),
+    ],
+)
+def test_declared_business_errors_stop_all_endpoints(local_api, status, body, code):
+    client, responses, hits, _ = local_api
+    responses.append((status, body))
+    with pytest.raises(MairuiQuotaError) as err:
+        client.fetch_universe()
+    assert err.value.scope == "credential"
+    assert f"HTTP {status} / 接口错误码 {code}" in str(err.value)
+    with pytest.raises(MairuiQuotaError):
+        client.fetch_kline("0.000001")
+    counts = request_usage.snapshot()["totals"]
+    assert counts["http_attempts"] == len(hits) == 1
+    assert counts[f"http_{status // 100}xx"] == counts["circuit_skips"] == 1
+    assert counts["retry_attempts"] == counts["json_successes"] == 0
+
+
+def test_ip_window_bounds_retries_and_recovers_across_endpoints(local_api, monkeypatch):
+    client, responses, hits, _ = local_api
+    client.retries = 8
+    now = [1000]
+    waits = []
+    monkeypatch.setattr(mairui.time, "monotonic", lambda: now[0])
+
+    def advance(seconds):
+        waits.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(mairui.time, "sleep", advance)
+    responses.extend([(429, {"code": 103, "message": "quota exhausted"}), (200, "103"), (200, [])])
+    with pytest.raises(MairuiQuotaError) as err:
+        client.fetch_universe()
+    assert err.value.scope == "ip_window" and "出口 IP" in str(err.value)
+    assert len(hits) == 2 and waits == [60]
+    now[0] += 59
+    with pytest.raises(MairuiQuotaError) as blocked:
+        client.fetch_kline("0.000001")
+    assert blocked.value.scope == "ip_window" and len(hits) == 2
+    now[0] += 1
+    assert client.fetch_kline("0.000001") == []
+    counts = request_usage.snapshot()["totals"]
+    assert counts["http_attempts"] == 3 and counts["retry_attempts"] == 1
+    assert counts["json_successes"] == counts["circuit_skips"] == 1
+
+
+def test_103_stops_mixed_endpoint_batch_without_permanent_block(local_api):
+    client, responses, hits, _ = local_api
+    client.retries = 0
+    responses.extend([(429, 103)] * client.workers)
+    with pytest.raises(MairuiQuotaError) as err:
+        client.fetch_indicators_many([f"0.{i:06d}" for i in range(300)])
+    assert err.value.scope == "ip_window"
+    assert 1 <= len(hits) <= client.workers
+
+
+def test_data_records_and_transport_status_are_independent_of_business_codes(local_api):
+    client, responses, hits, _ = local_api
+    client.retries = 0
+    valid = [
+        [{"code": 101, "message": "row"}],
+        {"code": "102", "price": 100},
+        {"data": {"code": 101}},
+        {"code": 102, "message": "data record", "price": 100},
+        {"code": 101, "data": [{"close": 10}]},
+        {"code": "00001"},
+        101.5,
+        "订单 #102",
+        "历史公告提到证书无效",
+    ]
+    responses.extend((200, row) for row in valid)
+    url = client._url("/hslt/list/" + client.licence)
+    for row in valid:
+        assert client._get_json(url) == row
+    # An undocumented business code matching an HTTP status is not an HTTP auth failure.
+    responses.extend([(200, {"code": 401, "msg": "unknown"}), (200, [])])
+    with pytest.raises(MairuiError) as err:
+        client.fetch_universe()
+    assert not isinstance(err.value, MairuiQuotaError)
+    assert client.fetch_universe() == []
+    assert len(hits) == len(valid) + 2
