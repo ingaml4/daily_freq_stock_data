@@ -1571,6 +1571,73 @@ def render_summary_notice(message: str) -> str:
     )
 
 
+def _render_execution(result):
+    from .execution import STATUS
+
+    engine = result.get("execution") or {}
+    if not engine:
+        return ""
+    cfg = engine["parameters"]
+    summary_rows = []
+    for tier, windows in engine["by_tier"].items():
+        for days, stats in windows.items():
+            counts = "，".join(f"{STATUS[k]} {v}" for k, v in stats["states"].items())
+            cost = stats["avg_cost"]
+            summary_rows.append(
+                f"<tr><td>第{tier}梯队</td><td>{days}</td><td>{stats['n']}/{stats['total']}</td>"
+                f"<td>{_pct(stats['avg_net_return'])}</td><td>{_pct(stats['win_rate'])}</td>"
+                f"<td>{cost if cost is not None else '—'}</td><td>{counts}</td></tr>"
+            )
+    details = []
+    for row in result.get("rows", []):
+        order = row["execution"]
+        buy = order["buy"]
+        name = html.escape(str(row["name"] or row["code"]))
+        summary = f"{html.escape(str(row['date']))} · {name} · 第{int(row['tier'])}梯队"
+        if not buy:
+            message = STATUS[order["status"]] + "：" + order["reason"]
+        else:
+            message = (
+                f"{buy['date']} 买入 {buy['shares']} 股，参考开盘 {buy['price']:.2f}，"
+                f"买方成本 {buy['cost']:.2f} 元"
+            )
+        history = [f"{a['date']} {a['reason']}" for a in order["entry_attempts"]]
+        for h, exit_ in order["exits"].items():
+            sell = exit_.get("sell")
+            if sell:
+                label = (
+                    f"{sell['date']} 卖出，参考收盘 {sell['price']:.2f}，"
+                    f"总成本 {exit_['total_cost']:.2f} 元，净收益 {_pct(exit_['net_return'])}"
+                )
+            else:
+                label = STATUS[exit_["status"]] + "：" + exit_["reason"]
+            blocked = "，".join(f"{a['date']} {a['reason']}" for a in exit_["attempts"])
+            history.append(
+                f"{h}日（计划 {exit_['target_date'] or '待日历更新'}） {label}"
+                + (f"；顺延记录 {blocked}" if blocked else "")
+            )
+        details.append(
+            f"<details><summary>{summary} · {html.escape(message)}</summary><p>"
+            + "<br>".join(map(html.escape, history))
+            + "</p></details>"
+        )
+    return (
+        "<h2>可执行 T+1 模拟</h2>"
+        f"<p>每条名单独立使用 {cfg['capital']:,.0f} 元，次日起最多 {cfg['entry_wait']} 个交易日"
+        "尝试开盘买入。持有期从成交后的下一交易日起算，到期按收盘卖出。"
+        "委托方向遇到涨跌停按未成交顺延，缺行情或除权无法核实则留空。"
+        f"单边佣金 {cfg['commission_bps']}bp（最低 {cfg['min_commission']} 元）、过户费 "
+        f"{cfg['transfer_bps']}bp、滑点 {cfg['slippage_bps']}bp，卖出印花税 "
+        f"{cfg['sell_tax_bps']}bp。1bp = 0.01%。</p>"
+        '<div class="wrap"><table><tr><th>梯队</th><th>持有期</th><th>完成/全部</th>'
+        "<th>平均净收益</th><th>净胜率</th><th>平均成本(元)</th><th>样本状态</th></tr>"
+        + "".join(summary_rows)
+        + "</table></div><details><summary>逐笔成交与顺延原因</summary>"
+        + "".join(details)
+        + "</details>"
+    )
+
+
 def render_tiers_page(
     result: Dict[str, Any],
     *,
@@ -1597,7 +1664,7 @@ def render_tiers_page(
     )
 
     hint = (
-        f'<p class="hint">口径：<b>{entry_cn}</b>（复盘是收盘后生成的，当天买不进去）· '
+        f'<p class="hint">价格观察：<b>{entry_cn}</b>（复盘是收盘后生成的，当天买不进去）· '
         f"持有 <b>{hold_cn}</b> 个交易日（收益 = 卖出日收盘 ÷ 买入价 − 1）· "
         "对照基准 = 同一时间窗<b>全市场等权</b>收益，超额 = 个股 − 基准 · "
         "「跟踪中」= 持有期还没走完，不拿没发生的数据充数。</p>"
@@ -1617,7 +1684,7 @@ def render_tiers_page(
     head = (
         '<tr><th class="l">梯队</th><th>样本</th>'
         + "".join(f"<th>{h}日 均值</th><th>胜率</th><th>超额</th>" for h in horizons)
-        + "<th>最大回撤均值</th><th>期间最大涨幅均值</th></tr>"
+        + "<th>最低价相对参考入场均值</th><th>最高价相对参考入场均值</th></tr>"
     )
     lines = []
     for item in (result.get("by_tier") or {}).values():
@@ -1666,7 +1733,7 @@ def render_tiers_page(
         '<tr><th class="l">名单日</th><th class="l">梯队</th><th class="l">代码</th>'
         '<th class="l">名称</th><th class="l">行业</th><th>买入价</th>'
         + "".join(f"<th>{h}日</th>" for h in horizons)
-        + "<th>超额(1日)</th><th>期间最大涨</th><th>期间最大回撤</th><th>状态</th></tr>"
+        + "<th>超额(1日)</th><th>最高价相对参考入场</th><th>最低价相对参考入场</th><th>状态</th></tr>"
     )
     lines = []
     for row in rows:
@@ -1712,11 +1779,12 @@ def render_tiers_page(
         + f"<p class='hint'>共 {len(rows)} 条跟踪记录 · "
         + f'{len(result.get("by_date") or [])} 个（名单日 × 梯队）</p>'
         + unmatched
-        + "<h2>① 按梯队汇总（累计所有名单日）</h2>"
+        + _render_execution(result)
+        + "<h2>① 按梯队汇总（价格观察）</h2>"
         + by_tier_table
-        + "<h2>② 按名单日</h2>"
+        + "<h2>② 按名单日（价格观察）</h2>"
         + by_date_table
-        + "<h2>③ 个股明细</h2>"
+        + "<h2>③ 个股明细（价格观察，高低价为路径极值）</h2>"
         + detail_table
     )
     return _tiers_page_shell(title, toolbar, body, "")
@@ -2009,6 +2077,9 @@ def make_handler(
                         for horizon in result.get("horizons") or []
                         for key in (f"ret_{horizon}d", f"excess_{horizon}d")
                     ]
+                    from .execution import csv_columns, csv_values
+
+                    rows = result.get("rows") or []
                     columns = [
                         "date",
                         "tier_label",
@@ -2020,11 +2091,15 @@ def make_handler(
                         "entry",
                         "close_t",
                         "status",
+                        "observation_label",
                     ] + horizon_keys
+                    columns.extend(csv_columns(result["horizons"]))
                     writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
                     writer.writeheader()
-                    for row in result.get("rows") or []:
+                    for row in rows:
                         record = {key: row.get(key) for key in columns}
+                        record.update(csv_values(row, result["horizons"]))
+                        record["observation_label"] = result["observation_label"]
                         for horizon in result.get("horizons") or []:
                             record[f"ret_{horizon}d"] = (row.get("rets") or {}).get(horizon)
                             record[f"excess_{horizon}d"] = (row.get("excess") or {}).get(horizon)

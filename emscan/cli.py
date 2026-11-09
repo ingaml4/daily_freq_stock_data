@@ -735,7 +735,17 @@ def cmd_tiers(cfg: Config, args: argparse.Namespace) -> int:
     if out:
         path = Path(out)
         path.parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(result["rows"]).to_csv(path, index=False, encoding="utf-8-sig")
+        from .execution import csv_values
+
+        rows = [
+            {
+                **{k: v for k, v in row.items() if k != "execution"},
+                "observation_label": result["observation_label"],
+                **csv_values(row, result["horizons"]),
+            }
+            for row in result["rows"]
+        ]
+        pd.DataFrame(rows).to_csv(path, index=False, encoding="utf-8-sig")
         print(f"\n已写出：{path}")
     return 0
 
@@ -749,7 +759,24 @@ def _tiers_text(result: Dict[str, Any], entry: str) -> str:
         f"复盘梯队跟踪回测（{entry_cn} · 持有 1/{'/'.join(horizons[1:])} 交易日 · 对比全市场等权）"
     )
     lines.append("")
-    lines.append("按梯队汇总（累计所有名单日）")
+    from .execution import STATUS
+
+    engine = result["execution"]
+    opts = engine["parameters"]
+    lines.append(
+        f"可执行 T+1 模拟：每笔 {opts['capital']:,.0f} 元，佣金 {opts['commission_bps']}bp"
+        f"（最低 {opts['min_commission']} 元），过户 {opts['transfer_bps']}bp，"
+        f"卖出税 {opts['sell_tax_bps']}bp，单边滑点 {opts['slippage_bps']}bp"
+    )
+    lines.append("从实际买入的下一交易日起数持有期，收盘卖出；收益仅统计买卖完成的记录。")
+    for tier, windows in engine["by_tier"].items():
+        for h, stats in windows.items():
+            states = "、".join(f"{STATUS[k]} {v}" for k, v in stats["states"].items())
+            avg = stats["avg_net_return"]
+            shown = f"{avg:.2%}" if avg is not None else "—"
+            lines.append(f"梯队 {tier} · {h}日 · 净收益均值 {shown} · {states}")
+    lines.append("")
+    lines.append("价格观察：按梯队汇总（累计所有名单日）")
     header = f"{'梯队':<10}{'样本':>5}{'完成':>5}"
     for h in horizons:
         header += f"{'均' + h + '日':>10}{'胜率':>8}{'超额':>9}"
@@ -766,7 +793,7 @@ def _tiers_text(result: Dict[str, Any], entry: str) -> str:
             row += f"{(excess * 100 if excess is not None else float('nan')):>8.2f}%"
         lines.append(row)
     lines.append("")
-    lines.append("按名单日（最近在前）")
+    lines.append("价格观察：按名单日（最近在前）")
     header = f"{'日期':<12}{'梯队':<10}{'只数':>5}"
     for h in horizons:
         header += f"{h + '日':>9}"
@@ -778,11 +805,11 @@ def _tiers_text(result: Dict[str, Any], entry: str) -> str:
             row += f"{(value * 100 if value is not None else float('nan')):>8.2f}%"
         lines.append(row + f"{item['status']:>8}")
     lines.append("")
-    lines.append("个股明细（跟踪中=持有期还没走完）")
+    lines.append("价格观察：个股明细（高低价相对入场价为路径极值）")
     header = f"{'日期':<12}{'梯队':<8}{'代码':<9}{'名称':<10}{'入场':>8}"
     for h in horizons:
         header += f"{h + '日':>9}"
-    lines.append(header + f"{'最大涨':>9}{'最大回撤':>10}{'状态':>7}")
+    lines.append(header + f"{'高价幅度':>9}{'低价幅度':>10}{'状态':>7}")
     for row in result["rows"]:
         line = (
             f"{row['date']:<12}{row['tier_label']:<8}{str(row['code']):<9}"

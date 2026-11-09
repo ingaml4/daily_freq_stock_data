@@ -27,6 +27,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
+from . import execution
 from .store import Store
 
 log = logging.getLogger("emscan")
@@ -315,22 +316,20 @@ def sync_tier_picks(
 
 
 # -------------------------------------------------------------------- 回测计算
-def _price_map(
-    frame: pd.DataFrame, secids: Sequence[str]
-) -> Dict[str, Dict[str, Dict[str, float]]]:
+def _price_map(frame: pd.DataFrame, secids: Sequence[str]) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """``{secid: {date: {open/high/low/close: 价格}}}``。"""
-    out: Dict[str, Dict[str, Dict[str, float]]] = {}
+    out = {}
     if frame is None or frame.empty:
         return out
     wanted = set(str(s) for s in secids)
+    numeric = ("open", "high", "low", "close", "volume", "chg", "pct_chg")
     for row in frame.to_dict("records"):
         secid = str(row.get("secid"))
         if secid not in wanted:
             continue
-        out.setdefault(secid, {})[str(row.get("date"))] = {
-            key: (None if pd.isna(row.get(key)) else float(row[key]))
-            for key in ("open", "high", "low", "close")
-        }
+        bar = {key: (None if pd.isna(row.get(key)) else float(row[key])) for key in numeric}
+        bar["source"] = row.get("source")
+        out.setdefault(secid, {})[str(row["date"])] = bar
     return out
 
 
@@ -359,7 +358,11 @@ def evaluate(store: Store, cfg, picks: Optional[pd.DataFrame] = None) -> Dict[st
     horizons = target_horizons(cfg)
     entry = entry_mode(cfg)
     frame = store.load_tier_picks() if picks is None else picks
+    opts = execution.settings(cfg)
+    execution_info = {"version": "a-share-t1-v1", "parameters": opts, "by_tier": {}}
     empty: Dict[str, Any] = {
+        "execution": execution_info,
+        "observation_label": "价格观察（未计费用和成交约束）",
         "rows": [],
         "by_tier": {},
         "by_date": [],
@@ -375,8 +378,11 @@ def evaluate(store: Store, cfg, picks: Optional[pd.DataFrame] = None) -> Dict[st
     from .industry import display_map
 
     _, industry = display_map(store, cfg)
-    secids = [str(s) for s in frame["secid"].tolist()]
-    bars = store.load_bars(secids=secids, columns=["secid", "date", "open", "high", "low", "close"])
+    secids = sorted(set(frame["secid"].astype(str)))
+    bars = store.load_bars(
+        secids=secids,
+        columns=["open", "high", "low", "close", "volume", "source", "chg", "pct_chg"],
+    )
     prices = _price_map(bars, secids)
 
     rows: List[Dict[str, Any]] = []
@@ -434,7 +440,8 @@ def evaluate(store: Store, cfg, picks: Optional[pd.DataFrame] = None) -> Dict[st
             rows.append(row)
             continue
 
-        window = days[entry_index : min(entry_index + max_horizon, len(days))]
+        window_start = entry_index + (entry == "close")
+        window = days[window_start : window_start + max_horizon]
         highs = [p for p in ((series.get(d) or {}).get("high") for d in window) if p]
         lows = [p for p in ((series.get(d) or {}).get("low") for d in window) if p]
         if highs:
@@ -472,9 +479,24 @@ def evaluate(store: Store, cfg, picks: Optional[pd.DataFrame] = None) -> Dict[st
             row["bench"][horizon] = round(base, 4)
             row["excess"][horizon] = round(ret - base, 4)
 
+    first_seen = {sid: min(series) for sid, series in prices.items() if series}
+    for row in rows:
+        sid = row["secid"]
+        row["execution"] = execution.simulate(
+            row,
+            days,
+            day_index.get(row["date"]),
+            prices.get(sid, {}),
+            first_seen.get(sid),
+            horizons,
+            opts,
+        )
+    execution_info["by_tier"] = execution.aggregate(rows, horizons)
     timely = [r for r in rows if r["status"] != "事后补生成"]
     return {
         "rows": rows,
+        "execution": execution_info,
+        "observation_label": empty["observation_label"],
         "by_tier": _aggregate_by_tier(timely, horizons),
         "by_date": _aggregate_by_date(timely, horizons),
         "entry": entry,
