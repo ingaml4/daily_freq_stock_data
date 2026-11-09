@@ -1795,6 +1795,7 @@ def make_handler(
     * ``/``                          -> 默认视图（放量）
     * ``/signals/<view>``            -> 四个主信号之一，支持 ``date/sort/order/q``
     * ``/api/signals?view=...``      -> JSON（给以后做小程序/微信/看板用）
+    * ``/api/watchlist-risk``         -> 按交易日和证券代码批量读负面信号
     * ``/login`` ``/logout``         -> 口令登录 / 退出（Cookie 会话，默认 7 天）
     * ``/healthz``                   -> 探活（**不校验口令**，只回 ``ok``、不含任何数据，
       方便 nginx/k8s 的 healthCheck 直接打）
@@ -1931,6 +1932,30 @@ def make_handler(
                 else:
                     target = quote(_safe_next(self.path), safe="/?&=%")
                     self._redirect(f"/login?next={target}")
+                return
+
+            if path == "/api/watchlist-risk":
+                from .watchlist_risk import InvalidRequest, risk_report
+
+                status = 200
+                try:
+                    with store_factory() as st:
+                        result = risk_report(
+                            st,
+                            params.get("date"),
+                            params.get("symbols"),
+                            cfg_for_backtest.get("mairui.kline_adjust", "f"),
+                        )
+                except InvalidRequest as exc:
+                    status, result = 400, {"error": str(exc)}
+                except Exception:
+                    log.exception("负面信号读取失败")
+                    status, result = 500, {"error": "risk data unavailable"}
+                self._send(
+                    json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8"),
+                    status,
+                    "application/json; charset=utf-8",
+                )
                 return
 
             if path in ("/tiers", "/tiers.csv", "/api/tiers"):

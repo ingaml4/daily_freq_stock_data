@@ -198,6 +198,8 @@ python3 -m emscan hits --only low_doji       # 只查缓存里的低位十字星
 
 ## 网页端（六个按钮 + 可排序表格）
 
+按交易日和证券代码批量查询放量大跌、持续阴跌、MACD 死叉、确认的顶背离和指数相对弱势，见[自选出池复核 API](docs/watchlist-risk.md)。
+
 ```bash
 python3 -m emscan web                          # 打开 http://127.0.0.1:8080/（默认只本机）
 python3 -m emscan web --host 0.0.0.0 --password 我的口令   # 对外暴露：设口令（或走反向代理 + TLS）
