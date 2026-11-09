@@ -133,11 +133,12 @@ def _tiers(store, cfg, day):
     }
     expected = len(picks) + len(parsed.get("unmatched", ()))
     empty = empty_labels == {1, 2}
+    covered_tiers = {k for k, _ in picks} | empty_labels
     result = stage(day if empty else actual, expected if content and (picks or explicit) else None,
                    len(requested & picks), generated_at=record.get("created_at"),
                    summary_date=day if content else None, engine=engine or None,
                    unexpected=len(requested - picks), explicitly_empty=empty)
-    result["ready"] = bool(engine and not engine.startswith("rule") and (picks or empty)
+    result["ready"] = bool(engine and not engine.startswith("rule") and covered_tiers == {1, 2}
                            and result["missing"] == 0 and requested == picks)
     result["reason"] = None if result["ready"] else (
         "summary_not_published" if not content else "rule_fallback" if engine.startswith("rule")
@@ -178,7 +179,7 @@ def report(store, cfg, day):
                     break
         complete = all(v["ready"] for v in stages.values())
         evidence_ready = stages["tiers"]["ready"] and evidence["complete"] == evidence["expected"]
-        ready = complete and evidence_ready and run["exit_code"] in (None, 0)
+        ready = complete and evidence_ready and run["phase"] != "run_started" and run["exit_code"] in (None, 0)
         today = clock.date().isoformat()
         in_window = day == today and clock.strftime("%H:%M") < "18:00"
         waiting = day > today or (in_window and run["phase"] != "run_finished" and

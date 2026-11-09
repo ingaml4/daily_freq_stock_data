@@ -56,3 +56,33 @@ def test_market_partial_snapshot_distinguishes_zero_volume_and_missing(tmp_path)
         status = readiness._bars(st, DAY)
         assert status["no_trade"] == 1 and status["active_bars"] == 1
         assert status["missing"] == 2 and not status["ready"]
+
+def test_phase_and_evidence_gate_after_close(tmp_path, monkeypatch):
+    from emscan import tier_reasons
+    cfg = make_cfg(tmp_path)
+    monkeypatch.setattr(readiness, "now", lambda: dt.datetime.fromisoformat(DAY + "T19:00:00+08:00"))
+    for name in ("_bars","_indicators","_benchmarks","_tiers"):
+        monkeypatch.setattr(readiness, name, lambda *args: {"ready": True, "reason": None})
+    with Store(tmp_path / "r.db").init_schema() as st:
+        result = {"expected": 2, "complete": 1}
+        monkeypatch.setattr(tier_reasons, "readiness", lambda *args: result)
+        assert readiness.report(st, cfg, DAY)["data_ready"]
+        assert not readiness.report(st, cfg, DAY)["ready"]
+        result["complete"] = 2
+        generation = st.record_run("run_started", trade_date=DAY, params={"code_version": "test"})
+        assert not readiness.report(st, cfg, DAY)["ready"]
+        st.record_run("run_finished", trade_date=DAY, params={"generation": generation, "exit_code": 0})
+        assert readiness.report(st, cfg, DAY)["ready"]
+
+
+def test_tiers_need_both_published_groups(tmp_path):
+    cfg = make_cfg(tmp_path)
+    with Store(tmp_path / "r.db").init_schema() as st:
+        st.upsert_symbols([{"secid":"1.600519","code":"600519","name":"贵州茅台"}])
+        def publish(lines):
+            st.save_summary(dict(date=DAY,engine="deepseek",content=lines))
+        st.save_tier_picks([dict(date=DAY,secid="1.600519",tier=1,code="600519",name="贵州茅台",source="summary")])
+        publish("TIER1: 600519 贵州茅台")
+        assert not readiness._tiers(st,cfg,DAY)["ready"]
+        publish("TIER1: 600519 贵州茅台\nTIER2: （空）")
+        assert readiness._tiers(st,cfg,DAY)["ready"]
