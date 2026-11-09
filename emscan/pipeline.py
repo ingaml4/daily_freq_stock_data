@@ -302,6 +302,13 @@ def sync_spot(
         )
         stats.skipped = "非交易日或数据未更新"
         return None
+    # 时间戳来自每只股票。停牌前的最后报价不能盖上今天的日期。
+    dated = {}
+    for row in spot:
+        quote_day = spot_trade_date([row]) or row.get("date")
+        if quote_day == trade_date:
+            dated[row["secid"]] = row
+    spot = list(dated.values())
     priced = [row for row in spot if (row.get("close") or 0) > 0 or (row.get("volume") or 0) > 0]
     if not priced:
         log.warning(
@@ -328,11 +335,18 @@ def sync_spot(
     bar_rows: List[Dict[str, Any]] = []
     suspended = 0
     for row in spot:
-        if not row.get("volume") or not row.get("close"):  # 停牌/无成交不落当日K线
-            suspended += 1
+        if (row.get("volume") or 0) <= 0 or (row.get("close") or 0) <= 0:
+            if row.get("volume") == 0:
+                suspended += 1
             continue
         bar_rows.append(dict(row, date=trade_date))
     written = store.upsert_bars(bar_rows)
+    from .readiness import code_version
+
+    store.record_run("spot_coverage", trade_date=trade_date, symbols=len(secids),
+                     params={"universe": len(set(secids)), "active": written,
+                             "no_trade": suspended, "reported": len(dated),
+                             "source": "dated_quotes", "code_version": code_version()})
     store.refresh_trading_days()
     stats.bars_written += written
     if not written:

@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import base64
 import gzip
 import hashlib
@@ -1533,6 +1534,8 @@ def render_summary_page(record: Dict[str, Any]) -> str:
     engine = html.escape(str(record.get("engine") or ""))
     body = render_markdown(str(record.get("content") or ""))
     badge = f'<span class="badge">{engine}</span>' if engine else ""
+    cover = {"ready": "完整", "waiting": "等待数据", "degraded": "部分可用"}.get(record.get("coverage_state"))
+    coverage_link = f'<a href="/api/readiness?date={date}">数据覆盖 · {cover}</a>' if cover else ""
     head = (
         '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -1540,7 +1543,7 @@ def render_summary_page(record: Dict[str, Any]) -> str:
         f"<style>{_SUMMARY_CSS}{TABS_CSS}{LAYOUT_CSS}</style></head><body>"
         '<div class="page"><header class="top">'
         f"<h1>{date} 当日总结{badge}</h1>"
-        f'<div class="actions"><a href="/summary.md?date={date}" download>下载 Markdown</a></div>'
+        f'<div class="actions">{coverage_link} <a href="/summary.md?date={date}" download>下载 Markdown</a></div>'
         + render_top_tabs("summary")
         + "</header>"
     )
@@ -1934,6 +1937,23 @@ def make_handler(
                     self._redirect(f"/login?next={target}")
                 return
 
+            if path == "/api/readiness":
+                from .readiness import report
+
+                day = params.get("date")
+                try:
+                    if not day or dt.date.fromisoformat(day).isoformat() != day:
+                        raise ValueError()
+                except ValueError:
+                    self._send(b'{"error":"date must be YYYY-MM-DD"}', 400,
+                               "application/json; charset=utf-8")
+                    return
+                with store_factory() as st:
+                    result = report(st, cfg_for_backtest, day)
+                self._send(json.dumps(result, ensure_ascii=False).encode("utf-8"),
+                           ctype="application/json; charset=utf-8")
+                return
+
             if path == "/api/watchlist-risk":
                 from .watchlist_risk import InvalidRequest, risk_report
 
@@ -2059,7 +2079,10 @@ def make_handler(
                     self.end_headers()
                     self.wfile.write(raw)
                     return
+                from .readiness import report as readiness_report
+
                 record["publication"] = st.publication_status(date)
+                record["coverage_state"] = readiness_report(st, cfg_for_backtest, date)["state"]
                 self._send(render_summary_page(record).encode("utf-8"))
                 return
 

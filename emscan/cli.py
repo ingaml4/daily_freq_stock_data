@@ -1133,6 +1133,24 @@ def cmd_hits(cfg: Config, args: argparse.Namespace) -> int:
 
 # --------------------------------------------------------------------------- 每日入口
 def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
+    from .readiness import code_version
+
+    day = tz_today()
+    with open_store(cfg) as store:
+        generation = store.record_run("run_started", trade_date=day,
+                                      params={"code_version": code_version()})
+    rc = 1
+    try:
+        rc = _daily_pipeline(cfg, args)
+        return rc
+    finally:
+        with open_store(cfg) as store:
+            store.record_run("run_finished", trade_date=day,
+                             params={"generation": generation, "exit_code": rc,
+                                     "code_version": code_version()})
+
+
+def _daily_pipeline(cfg: Config, args: argparse.Namespace) -> int:
     """服务器上的唯一入口：自愈同步 + 放量扫描 + 指标信号 + 报告/推送。"""
     store = open_store(cfg)
     client = MairuiClient.from_config(cfg)
