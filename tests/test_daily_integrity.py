@@ -2,6 +2,7 @@ import json
 from argparse import Namespace
 
 import pandas as pd
+import pytest
 import requests
 
 from helpers import bar, make_cfg, trading_dates
@@ -107,3 +108,41 @@ def test_late_tier_pick_has_no_live_returns(tmp_path):
         assert res["rows"][0]["status"] == "事后补生成"
         assert res["rows"][0]["rets"] == {}
         assert res["by_tier"] == {} and res["by_date"] == []
+
+
+def test_recover_and_preserve_published_ai_with_manual_overlap(tmp_path, monkeypatch):
+    day = "2026-11-06"
+    cfg = make_cfg(tmp_path)
+    stored = "TIER1: 000001 平安银行 | 600519 贵州茅台\nTIER2: 空"
+    monkeypatch.setattr(summary, "call_deepseek", lambda *_: pytest.fail("重复请求 AI"))
+    with open_store(cfg) as store:
+        store.upsert_symbols([
+            {"secid": "0.000001", "code": "000001", "name": "平安银行"},
+            {"secid": "1.600519", "code": "600519", "name": "贵州茅台"}
+        ])
+        manual = {"date": day, "tier": 1, "secid": "0.000001", "source": "manual",
+                  "reason": "手工入选", "generated_at": day + " 16:00:00"}
+        store.save_tier_picks([manual])
+        store.save_summary({"date": day, "engine": "deepseek", "content": stored})
+        original = store.get_summary(day)
+        for force_rule in (False, True):
+            result = summary.generate_summary(store, cfg, day, api_key="test",
+                                              force=True, force_rule=force_rule)
+            assert result["reused"] and store.get_summary(day) == original
+            picks = store.load_tier_picks().set_index("secid")
+            assert picks.loc["1.600519", "created_at"] == original["created_at"]
+            assert picks.loc["0.000001", "source"] == "manual"
+            assert picks.loc["0.000001", "created_at"] == manual["generated_at"]
+            assert picks.loc["0.000001", "reason"] == manual["reason"]
+
+
+def test_competing_publisher_cannot_replace_snapshot(tmp_path):
+    day = "2026-11-06"
+    cfg = make_cfg(tmp_path)
+    with open_store(cfg) as first, open_store(cfg) as second:
+        initial = second.get_summary(day)
+        record = {"date": day, "engine": "deepseek", "content": "first"}
+        assert first.publish_summary(record, initial) is None
+        preserved = second.publish_summary(dict(record, content="second"), initial)
+        assert preserved["reused"] and preserved["content"] == "first"
+        assert second.get_summary(day)["content"] == "first"

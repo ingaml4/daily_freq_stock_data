@@ -660,7 +660,13 @@ class Store:
         payload = []
         stamp = _now()
         rows = list(rows)
-        dates = sorted({str(r.get("date")) for r in rows if r.get("date") and r.get("secid")})
+        dates = sorted(
+            {
+                str(r["date"])
+                for r in rows
+                if r.get("date") and r.get("secid") and r.get("source") != "manual"
+            }
+        )
         for row in rows:
             if not row.get("date") or not row.get("secid"):
                 continue
@@ -682,9 +688,13 @@ class Store:
             )
         if payload:
             self.conn.executemany(
-                "INSERT OR REPLACE INTO tier_picks "
+                "INSERT INTO tier_picks "
                 "(date, tier, secid, code, name, reason, source, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(date,tier,secid) DO UPDATE SET "
+                "code=excluded.code, name=excluded.name, reason=excluded.reason, "
+                "source=excluded.source, created_at=excluded.created_at "
+                "WHERE excluded.source='manual' OR tier_picks.source IS NOT 'manual'",
                 payload,
             )
         self.conn.commit()
@@ -702,14 +712,23 @@ class Store:
         sql += " ORDER BY date DESC, tier ASC, secid ASC"
         return pd.read_sql_query(sql, self.conn, params=params)
 
-    def tier_dates(self, limit: Optional[int] = None) -> List[str]:
+    def tier_dates(self, limit: Optional[int] = None, source: Optional[str] = None) -> List[str]:
         """有梯队名单的交易日（降序）。"""
-        sql = "SELECT DISTINCT date FROM tier_picks ORDER BY date DESC"
+        sql = "SELECT DISTINCT date FROM tier_picks"
         params: List[Any] = []
+        if source:
+            sql += " WHERE source=?"
+            params.append(source)
+        sql += " ORDER BY date DESC"
         if limit:
             sql += " LIMIT ?"
             params.append(int(limit))
         return [str(r["date"]) for r in self.conn.execute(sql, params).fetchall()]
+
+    def has_summary_picks(self, day: str) -> bool:
+        return self.conn.execute(
+            "SELECT 1 FROM tier_picks WHERE date=? AND source='summary' LIMIT 1", (day,)
+        ).fetchone() is not None
 
     def all_trading_days(self) -> List[str]:
         """本地全部交易日（升序）——回测算"T+N 个交易日"要用它当标尺。"""
@@ -775,6 +794,20 @@ class Store:
         return int(row["value"]) if row else int(cur.lastrowid or 1)
 
     # ------------------------------------------------------- 当日总结（复盘）
+    def publish_summary(
+        self, record: Dict[str, Any], previous: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """并发重跑时只允许替换生成前读到的版本，已配套落榜的 AI 复盘保留。"""
+        day = str(record["date"])
+        with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            current = self.get_summary(day)
+            archived = current and not str(current.get("engine") or "rule").startswith("rule")
+            if current and (current != previous or (archived and self.has_summary_picks(day))):
+                return dict(current, reused=True)
+            self.save_summary(record)
+        return None
+
     def save_summary(self, record: Dict[str, Any]) -> None:
         self.conn.execute(
             "INSERT OR REPLACE INTO daily_summary (date, created_at, engine, content, digest) "

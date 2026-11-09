@@ -241,7 +241,7 @@ def sync_tier_picks(
             str(row["date"])
             for row in store.conn.execute("SELECT date FROM daily_summary ORDER BY date ASC")
         ]
-    already = set(store.tier_dates())
+    already = set(store.tier_dates(source="summary"))
     limits = tier_limits(cfg)
     stats: Dict[str, Any] = {
         "dates": 0,

@@ -676,6 +676,20 @@ def generate_summary(
       数据变了会自动重算；旧版没有指纹的总结会在下一次运行时自动重建。
     """
     api_key = "" if force_rule else api_key or str(cfg.get("summary.api_key") or "")
+    existing = store.get_summary(str(trade_date))
+    if (
+        isinstance(store, Store)
+        and existing
+        and not str(existing["engine"] or "rule").startswith("rule")
+    ):
+        published = store.has_summary_picks(trade_date)
+        if not published:
+            # 修复上次在写正文与解析名单之间退出的情况，使用原文的生成时间。
+            stats = sync_tier_picks(store, cfg, dates=[trade_date])
+            published = stats["dates"] > 0 or store.has_summary_picks(trade_date)
+        if published:
+            log.info("保留 %s 已发布的 AI 复盘及梯队", trade_date)
+            return dict(store.get_summary(str(trade_date)), reused=True)
     state = _signal_state(store, trade_date)
     ready, reason = _summary_ready(cfg, state)
     if not ready and not force:
@@ -689,7 +703,6 @@ def generate_summary(
             "reason": reason,
         }
     fingerprint = str((state or {}).get("fingerprint") or "")
-    existing = store.get_summary(str(trade_date))
     retry_ai = bool(existing and api_key and str(existing.get("engine")).startswith("rule"))
     if (
         existing
@@ -756,7 +769,12 @@ def generate_summary(
         "digest": json.dumps(lean, ensure_ascii=False),
         "fingerprint": fingerprint,
     }
-    store.save_summary(record)
+    if isinstance(store, Store):
+        preserved = store.publish_summary(record, existing)
+        if preserved is not None:
+            return preserved
+    else:
+        store.save_summary(record)
     # 复盘落库后顺手把 TIER1/TIER2 两行解析成梯队名单（回测页面的数据来源）
     if engine and not str(engine).startswith("rule"):
         try:
