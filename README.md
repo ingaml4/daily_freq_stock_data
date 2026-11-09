@@ -45,6 +45,15 @@ DeepSeek 返回 HTTP 402 时保存欠费事件，本机收盘自动化运行 `py
 
 旧库可用 `python3 -m emscan.moving_averages --start YYYY-MM-DD --end YYYY-MM-DD` 补齐 MA5/10/20/60，并更新已有每日缓存的均线及交叉标记。每次最多 366 个自然日，`--secid 1.603986` 可限定单股。复跑使用相同日期与窗口，只更新有差异的字段。
 
+### 判断某一天的数据是否已发布
+
+登录后查询 `GET /api/readiness?date=2026-11-09`。17:16 的客户端应传入当天日期，先检查 `state`。当日收盘任务还在生成时可能返回 `waiting`，可稍后重查。18:00 后仍缺数据、生成失败或发布了规则版复盘时，返回 `degraded` 并列出各阶段实际日期、已就绪条数和缺口。次日凌晨查询前一交易日时仍按显式请求日期判断。
+
+- `data_ready` 覆盖同日行情、有效指标及信号缓存、四个指数、原文与落库相符的两个梯队。按足够的有效收盘数逐项检查 MA5/10/20/60。上市时间短的标的会进入 `insufficient_history`。
+- `entry_evidence_complete` 检查每个证券与梯队是否有至少一条包含五个字段的原文理由。`ready` 要求数据和理由都完整，且当日已启动的任务成功结束。调用方可单独使用已经就绪的行情，缺失的理由字段仍需保留空值。
+- `run.generation` 和 `run.source_version` 标识新版任务运行，`tier_reasons.source_version` 标识榜单原文版本。升级前无记录的代码版本为 null。`reader_code_version` 是当前提供查询的代码版本。
+- 行情覆盖来源 `dated_quotes` 表示按证券逐条核对报价日期。`historical_emscan_log` 表示原运行日志中的有效和停牌/无成交计数已与当日总池及库内实际行数核对，旧日志缺少逐证券状态。缺少覆盖凭据时返回 `unverified_snapshot_coverage`。
+
 ### 按证券追溯梯队入池理由
 
 在站点已有认证下访问 `GET /api/tier-reasons?date=2026-11-09&symbols=SH600903,SH600403`。
