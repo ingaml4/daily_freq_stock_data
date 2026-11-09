@@ -197,3 +197,12 @@ def test_matched_adjusted_returns_ignore_other_days_and_defend_gaps(market):
     assert row["signals"]["persistent_decline"]["status"] == "unavailable"
     assert row["signals"]["macd_bearish_divergence"]["status"] == "unavailable"
     assert row["signals"]["market_up_stock_down"]["status"] == "triggered"
+
+
+def test_missing_peak_sessions_are_reported_without_advancing_confirmation(market):
+    st, days = market
+    st.conn.execute("DELETE FROM bars WHERE secid=? AND date=?", ("1.600519", days[-8]))
+    evidence = risk_report(st, days[-1], "SH600519")["rows"][0]["signals"]["macd_bearish_divergence"]
+    assert evidence["status"] == "unavailable" and evidence["reason"] == "missing_peak_bars"
+    assert evidence["evidence"]["missing_sessions"] == [days[-8]]
+    assert days[-8] in evidence["evidence"]["blocking_window"]

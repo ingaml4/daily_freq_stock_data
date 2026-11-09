@@ -133,19 +133,36 @@ def _divergence(days, bars, i, valid_counts):
     if pivot < 2:
         return _result(reason="insufficient_peak_history")
 
+    def usable_high(day):
+        row = bars.get(day)
+        return _valid(row) and row["high"] is not None and row["high"] > 0
+
     def peak_at(k):
-        window = [bars.get(d) for d in days[k - 2 : k + 3]]
-        if any(not _valid(r) or r["high"] is None or r["high"] <= 0 for r in window):
+        window = days[k - 2 : k + 3]
+        if not all(usable_high(day) for day in window):
             return None
-        price = window[2]["high"]
-        return all(price > r["high"] for j, r in enumerate(window) if j != 2)
+        price = bars[days[k]]["high"]
+        return all(price > bars[d]["high"] for d in window if d != days[k])
+
+    def missing_peak(k):
+        return _result(
+            reason="missing_peak_bars",
+            evidence={
+                **evidence,
+                "calendar_basis": "market_trading_sessions",
+                "blocking_window": days[k - 2 : k + 3],
+                "missing_sessions": [
+                    d for d in days[max(0, pivot - span - 2) : i + 1] if not usable_high(d)
+                ],
+            },
+        )
 
     if valid_counts[pivot] < PARAMETERS["macd_dead_cross"]["min_valid_bars"]:
         return _result(reason="insufficient_macd_history")
     current = peak_at(pivot)
     evidence = {"candidate_peak_date": days[pivot], "confirmation_session": days[i]}
     if current is None:
-        return _result(reason="missing_peak_bars", evidence=evidence)
+        return missing_peak(pivot)
     if not current:
         return _check(False, days[i], evidence)
     for k in range(
@@ -155,7 +172,7 @@ def _divergence(days, bars, i, valid_counts):
     ):
         previous = peak_at(k)
         if previous is None:
-            return _result(reason="missing_peak_bars", evidence=evidence)
+            return missing_peak(k)
         if previous:
             first, second = bars[days[k]], bars[days[pivot]]
             first_dif, _, second_dif, _, source = _macd_pair(first, second)
