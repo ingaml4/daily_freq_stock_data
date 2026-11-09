@@ -48,6 +48,8 @@ from typing import (
 
 import requests
 
+from . import request_usage
+
 log = logging.getLogger(__name__)
 
 # 官方文档主域名；api.mairui.club 是同一服务的备用域名
@@ -169,6 +171,63 @@ class MairuiError(RuntimeError):
 
 class MairuiQuotaError(MairuiError):
     """接口限额、访问权限或凭证阻止请求，不应退化为逐股调用。"""
+
+    def __init__(self, message, scope="endpoint"):
+        super().__init__(message)
+        self.scope = scope
+
+
+def _quota_scope(status, problem):
+    # 供应商有时以 200 + 业务错误返回全局额度/证书故障。只按明确标志区分。
+    detail = (problem or "").lower()
+    global_markers = (
+        "无效证书",
+        "证书无效",
+        "证书已过期",
+        "证书过期",
+        "证书已失效",
+        "授权码无效",
+        "授权码已过期",
+        "余额不足",
+        "今日额度已用完",
+        "日额度已耗尽",
+        "当日调用次数已达上限",
+        "invalid licence",
+        "license expired",
+        "invalid license",
+        "daily quota exceeded",
+        "quota exhausted",
+        "insufficient credits",
+    )
+    if status == 401 or any(marker in detail for marker in global_markers):
+        return "credential"
+    if status == 403 or any(
+        marker in detail
+        for marker in (
+            "无权访问",
+            "无权限",
+            "权限不足",
+            "套餐不支持",
+            "not entitled",
+            "permission denied",
+        )
+    ):
+        return "endpoint"
+    if status == 402:
+        return "credential"
+    return None
+
+
+def _completed(futures, mixed_endpoints=False):
+    for future in as_completed(futures):
+        error = future.exception()
+        if isinstance(error, MairuiQuotaError) and (
+            error.scope == "credential" or not mixed_endpoints
+        ):
+            for pending in futures:
+                pending.cancel()
+            raise error
+        yield future
 
 
 # --------------------------------------------------------------------------- 基础转换
@@ -736,6 +795,14 @@ class MairuiClient:
         self.multi_batch = max(1, min(int(multi_batch), 20))
         self.limiter = RateLimiter(self.rate_limit_per_min)
         self.session = session or requests.Session()
+        self._metered_session = session is None
+        if self._metered_session:
+            for scheme in ("https://", "http://"):
+                self.session.mount(scheme, request_usage.MeteredAdapter())
+        self._count_lock = threading.Lock()
+        self._block_lock = threading.Lock()
+        self._blocked_routes = {}
+
         self.session.headers.update(DEFAULT_HEADERS)
         self.request_count = 0
 
@@ -767,37 +834,77 @@ class MairuiClient:
     def _url(self, path: str) -> str:
         return f"{self.base_url}{path}"
 
+    def _check_block(self, route):
+        with self._block_lock:
+            credential = self._blocked_routes.get("*")
+            endpoint = self._blocked_routes.get(route)
+        if credential or endpoint:
+            request_usage.count(route, "circuit_skips")
+            raise MairuiQuotaError(
+                credential or endpoint, "credential" if credential else "endpoint"
+            )
+
+    def _block(self, route, scope, message):
+        with self._block_lock:
+            self._blocked_routes["*" if scope == "credential" else route] = message
+        raise MairuiQuotaError(message, scope)
+
     def _get_json(self, url: str, params: Optional[Dict[str, Any]] = None) -> Any:
         """GET 一个 JSON 接口；失败按指数退避重试。"""
+        route = request_usage.endpoint(url, self.base_url)
+        request_usage.count(route, "logical_calls")
         last_error = "unknown"
         for attempt in range(self.retries + 1):
+            self._check_block(route)
             self.limiter.acquire()
+            self._check_block(route)
+            status, problem = None, None
             try:
-                resp = self.session.get(url, params=params, timeout=self.timeout)
-                self.request_count += 1
+                with request_usage.call(route, retry=attempt > 0):
+                    # 调用方注入的 Session 可自定义传输层，无法证明其内部 HTTP 次数，单列。
+                    if not self._metered_session:
+                        request_usage.count(route, "external_gets")
+                    resp = self.session.get(url, params=params, timeout=self.timeout)
+                with self._count_lock:
+                    self.request_count += 1  # 保留原字段：收到响应的 GET 次数
+                status = resp.status_code
                 try:
                     payload: Any = resp.json()
                 except ValueError:
                     payload = None
-                if payload is None:
-                    last_error = f"HTTP {resp.status_code}（响应不是 JSON）"
-                else:
-                    problem = error_message(payload)
-                    if problem:
-                        last_error = f"接口报错 {problem}"
-                    elif resp.status_code == 200:
-                        if self.sleep:
-                            time.sleep(self.sleep * random.random())
-                        return payload
-                    else:
-                        last_error = f"HTTP {resp.status_code}"
-            except Exception as exc:  # 网络异常、超时、TLS 失败等
-                last_error = f"{type(exc).__name__}: {exc}"
+                problem = error_message(payload)
+                if not problem and isinstance(payload, str) and _quota_scope(200, payload):
+                    problem = payload
+                elif payload is None:
+                    problem = resp.text[:512]
+                provider_code = str(payload.get("code", "")) if isinstance(payload, dict) else ""
+                if status == 200 and payload is not None and not problem:
+                    request_usage.count(route, "json_successes")
+                    if self.sleep:
+                        time.sleep(self.sleep * random.random())
+                    return payload
+                last_error = f"HTTP {status}"
+                if problem and provider_code.isdigit() and len(provider_code) <= 5:
+                    last_error += f" / 接口错误码 {provider_code}"
+                    if status == 200:
+                        status = int(provider_code)
+                elif payload is None:
+                    last_error += "（响应不是 JSON）"
+            except Exception as exc:
+                # requests 的异常通常含完整 URL，不能把证书复制进日志或异常链。
+                last_error = type(exc).__name__
+            scope = _quota_scope(status, problem)
+            if scope:
+                self._block(route, scope, f"{route} 失败：{last_error}")
+            if status in (400, 404, 405, 410, 422):
+                raise MairuiError(f"{route} 失败：{last_error}")
             if attempt < self.retries:
                 backoff = min(0.5 * (2**attempt), 5.0) + random.random() * 0.2
-                log.debug("请求失败(%s)，%.1fs 后重试：%s", last_error, backoff, url)
+                log.debug("%s 请求失败（%s），%.1fs 后重试", route, last_error, backoff)
                 time.sleep(backoff)
-        raise MairuiError(f"请求 {url} 失败：{last_error}")
+        if status == 429:
+            self._block(route, "endpoint", f"{route} 持续限流：{last_error}")
+        raise MairuiError(f"{route} 失败：{last_error}")
 
     # ------------------------------------------------------------- 股票列表
     def fetch_benchmark_daily(self, dm: str, start: str, end: str, *, latest: bool = False):
@@ -908,7 +1015,7 @@ class MairuiClient:
         rows: List[Dict[str, Any]] = []
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
             futures = {pool.submit(self.fetch_quote_one, secid): secid for secid in secids}
-            for future in as_completed(futures):
+            for future in _completed(futures):
                 secid = futures[future]
                 try:
                     rows.extend(future.result())
@@ -985,7 +1092,7 @@ class MairuiClient:
                 ): secid
                 for secid in secids
             }
-            for future in as_completed(futures):
+            for future in _completed(futures):
                 secid = futures[future]
                 done += 1
                 if progress:
@@ -1065,7 +1172,7 @@ class MairuiClient:
                 )
                 for secid, kind in jobs
             }
-            for future in as_completed(futures):
+            for future in _completed(futures, mixed_endpoints=True):
                 secid, kind = futures[future]
                 done += 1
                 if progress:
@@ -1126,7 +1233,7 @@ class MairuiClient:
         done = 0
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
             futures = {pool.submit(self.fetch_tag_members, node["code"]): node for node in nodes}
-            for future in as_completed(futures):
+            for future in _completed(futures):
                 node = futures[future]
                 done += 1
                 if progress:
@@ -1151,7 +1258,7 @@ class MairuiClient:
         done = 0
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
             futures = {pool.submit(self.fetch_instrument, secid): secid for secid in secids}
-            for future in as_completed(futures):
+            for future in _completed(futures):
                 secid = futures[future]
                 done += 1
                 if progress:
