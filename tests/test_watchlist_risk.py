@@ -32,13 +32,9 @@ def market(tmp_path):
         macd.append({"secid": "1.600519", "date": day, "macd_diff": dif, "macd_dea": 0.0})
     st.upsert_bars(rows)
     st.upsert_indicators("macd", macd)
-    st.conn.execute(
-        "CREATE TABLE IF NOT EXISTS benchmark_bars(date TEXT,code TEXT,close REAL,"
-        "pct_chg REAL,source TEXT,PRIMARY KEY(code,date))"
-    )
     st.conn.executemany(
-        "INSERT INTO benchmark_bars(date,code,close,pct_chg,source) VALUES(?,?,?,?,?)",
-        [(d, "000001", 3000, 1.0, "test-index") for d in days],
+        "INSERT INTO benchmark_bars(date,code,close,prev_close,pct_chg,source) VALUES(?,?,?,?,?,?)",
+        [(d, "000001", 3030, 3000, 1.0, "test-index") for d in days],
     )
     st.conn.commit()
     yield st, days
@@ -159,8 +155,8 @@ def test_dual_benchmarks_distinguish_general_and_opposite_lag(market):
     day = days[-1]
     st.upsert_bars([bar("0.300001", day, 100, pct_chg=-1)])
     st.conn.execute(
-        "INSERT INTO benchmark_bars(code,date,pct_chg,close,source) VALUES(?,?,?,?,?)",
-        ("399006", day, -0.1, 1500, "test-index"),
+        "INSERT INTO benchmark_bars(code,date,pct_chg,close,prev_close,source) VALUES(?,?,?,?,?,?)",
+        ("399006", day, -0.1, 1498.5, 1500, "test-index"),
     )
     st.conn.commit()
     row = risk_report(st, day, "SZ300001")["rows"][0]
