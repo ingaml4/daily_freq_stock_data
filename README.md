@@ -43,6 +43,8 @@ DeepSeek 返回 HTTP 402 时保存欠费事件，本机收盘自动化运行 `py
 若只写入了 AI 正文，重跑会先从原文恢复名单。规则版及确实缺榜的日期仍可补生成。
 手工加入的名单及其生成时间在同步或补榜时保留。
 
+旧库可用 `python3 -m emscan.moving_averages --start YYYY-MM-DD --end YYYY-MM-DD` 补齐 MA5/10/20/60，并更新已有每日缓存的均线及交叉标记。每次最多 366 个自然日，`--secid 1.603986` 可限定单股。复跑使用相同日期与窗口，只更新有差异的字段。
+
 ## 命令一览
 
 | 命令 | 作用 |
@@ -516,7 +518,7 @@ mairui:
 | `mairui.kline_adjust` | `f` | 前复权（`n` 不复权 / `b` 后复权 / `fr`/`br` 等比） |
 | `reconcile_calendar_days` | `45` | 自愈比对窗口：往前多少自然日找缺口 |
 | `sync.max_symbols_per_run` | `0` | 单次最多处理多少只（0=不限），限频低时用它分多次跑 |
-| `indicators.kinds` | `[macd, kdj, boll]` | 每天抓哪些指标（可选 `ma`）；请求数 = 股票数 × 种类 |
+| `indicators.kinds` | `[macd, kdj, boll, ma]` | 每日计算的指标种类，本地模式无需额外接口请求 |
 | `indicators.limit` | `10` | 首次抓指标只取最近 N 条（够判断金叉即可） |
 | `signals.rules` | `[macd_golden, kdj_golden, boll_lower]` | 信号规则；`signals.match` 可选 `any`/`all` |
 | `universe.boards` | 沪深主板+创业板+科创板 | 想加北交所需要另配（见下） |

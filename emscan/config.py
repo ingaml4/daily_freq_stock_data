@@ -82,7 +82,7 @@ DEFAULTS: Dict[str, Any] = {
     },
     "indicators": {
         "enabled": True,
-        "kinds": ["macd", "kdj", "boll"],
+        "kinds": ["macd", "kdj", "boll", "ma"],
         # 指标来源：local=本地按日线算（默认，零接口请求、毫秒级、可随时重算）
         #           api  =拉麦蕊指标接口（口径以券商为准，但每天 股票数×种类 次请求）
         "source": "local",

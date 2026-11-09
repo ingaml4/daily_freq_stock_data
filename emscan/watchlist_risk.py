@@ -9,6 +9,7 @@ from datetime import date as Date
 import pandas as pd
 
 from .indicators import compute_frame
+from .moving_averages import evidence as ma_evidence
 
 from .mairui import board_of, dm_of, secid_of
 
@@ -485,7 +486,11 @@ def risk_report(store, day, symbols, adjust="f"):
             secid, reason = _symbol(raw)
             key = secid or reason
             if key not in evaluated:
-                evaluated[key] = _evaluate(conn, raw, day, days, latest, benchmarks)
+                row = _evaluate(conn, raw, day, days, latest, benchmarks)
+                row["moving_averages"] = ma_evidence(
+                    conn, row["secid"], day, (row["bar"] or {}).get("close"), adjust, row["reason"]
+                )
+                evaluated[key] = row
             rows.append(dict(evaluated[key], requested_symbol=raw))
         return {
             "rule_version": RULE_VERSION,

@@ -43,3 +43,9 @@
 MACD 使用项目公式 EMA12、EMA26、EMA9。两端同源且指标完整时优先使用已存 `indicators`；缺少端点时，使用同一段截至观察窗口的本地有效日线重算两个端点，证据注明 `recomputed_from_local_bars`。窗口内预热不足、缺少上一交易日行情、缺少峰附近应有的行情或缺少同日指数收益时分别返回对应的缺数原因。仅知道缺少有效日线时，原因统一为 `no_valid_bar`，其中包括停牌和上游尚未采集。
 
 顶背离按全市场交易日检查峰左右的邻居。缺少有效行情时，`missing_peak_bars` 的证据包含首个阻断判断的五日窗口 `blocking_window`，以及峰搜索区间内缺少有效最高价的日期 `missing_sessions`。例如高争民爆（002827.SZ）在 2026-10-26 至 10-30 停牌，11-02 复牌。11-09 查询时，11-05 是待对比的后峰，前峰搜索跨越这五个停牌日，返回不可用。逐股有效交易日序列会跨过停牌区间，两种窗口可能给出不同结果。[停牌公告](https://static.cninfo.com.cn/finalpage/2026-10-26/1225621271.PDF) · [复牌公告](https://static.cninfo.com.cn/finalpage/2026-11-02/1225650638.PDF)
+
+## 均线证据
+
+每行的 `moving_averages.ma5`、`ma10`、`ma20`、`ma60` 分别给出截至请求日（含当日）的最近 N 根有效收盘价的简单平均值。样本要求收盘价和成交量均大于零，字段包含 `value`、`period`、`sample_count`、`window_start`、`date`、`close`、`position`（above/at/below）、`distance_pct`（收盘 ÷ 均线 − 1，以百分数表示）、`source`、`bar_sources` 和 `configured_kline_adjust`。新股欠缺样本时保留实际数量，均线和相对位置留空。停牌或无目标日行情时标记 `unavailable`。
+
+`price_basis=as_stored` 表示直接读取仓库当时存储的收盘（历史 K 线依采集配置、快照用入库报价）。接口按请求日用相同窗口计算，可核对持久化 `indicators` / `daily_signals` 中的值。箱体特征 `box_ma_gap` 等于 `abs(ma5-ma20)/ma20`，还需满足箱体自身的最低历史样本要求。

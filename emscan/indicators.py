@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from .moving_averages import PERIODS as MA_PERIODS, write_days as write_ma_days
 from .store import INDICATOR_COLUMNS, Store
 
 log = logging.getLogger("emscan")
@@ -38,7 +39,6 @@ MACD_SIGNAL = 9
 KDJ_N = 9
 BOLL_N = 20
 BOLL_K = 2.0
-MA_PERIODS = (5, 10, 20, 60)
 
 # 算指标需要的"预热"自然日：最长的 MA60 要 60 个交易日，EMA26 递推约 100 个交易日收敛，
 # 200 自然日 ≈ 137 个交易日，足够；再多只是白读数据
@@ -124,17 +124,25 @@ def compute_and_store(
     if not secids:
         return 0
     target = sorted({str(d) for d in dates}) if dates else None
+    written = 0
+    if "ma" in kinds:
+        ma_days = target if target is not None else store.all_trading_days()
+        written = write_ma_days(store, secids, ma_days)
+        kinds = [kind for kind in kinds if kind != "ma"]
+        if not kinds:
+            return written
     start = None
     if target:
         start = (pd.Timestamp(target[0]) - pd.Timedelta(days=WARMUP_CALENDAR_DAYS)).strftime(
             "%Y-%m-%d"
         )
     step = max(1, int(chunk))
-    written = 0
     total = len(secids)
     for offset in range(0, total, step):
         group = list(secids[offset : offset + step])
-        bars = store.load_bars(start=start, secids=group, columns=BAR_INPUT_COLUMNS)
+        bars = store.load_bars(
+            start=start, end=target[-1] if target else None, secids=group, columns=BAR_INPUT_COLUMNS
+        )
         if bars.empty:
             continue
         bars["date"] = bars["date"].astype(str)
