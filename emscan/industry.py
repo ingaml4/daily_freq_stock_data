@@ -14,7 +14,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .mairui import TAG_KINDS, MairuiClient, MairuiError
@@ -43,14 +45,16 @@ def configured_kinds(cfg, override: Optional[Sequence[str]] = None) -> List[str]
     return known or list(DEFAULT_KINDS)
 
 
-def is_due(store: Store, cfg, force: bool = False) -> bool:
+def is_due(store: Store, cfg, force: bool = False, kind=None) -> bool:
     """源数据每周六更新：距上次同步不足 ``refresh_days`` 天就跳过。"""
     if force:
         return True
     days = int(cfg.get("industry.refresh_days", 7) or 7)
     if days <= 0:
         return True
-    last = store.get_meta(META_KEY)
+    # 老库只有全局时间；第一次单类别刷新前为已有类别保存该基线。
+    last = store.get_meta(f"{META_KEY}:{kind}") if kind else None
+    last = last or store.get_meta(META_KEY)
     if not last:
         return True
     old = parse_stamp(last)
@@ -75,11 +79,20 @@ def sync_tags(
     if not bool(cfg.get("industry.enabled", True)) and not force:
         return {}
     wanted = configured_kinds(cfg, kinds)
-    if not is_due(store, cfg, force=force):
+    stage_key = "symbol_tags_progress:" + ",".join(sorted(wanted))
+    checkpoint = json.loads(store.get_meta(stage_key) or "{}")
+    available = store.symbol_tag_stats()
+    if not checkpoint and all(
+        k in available and not is_due(store, cfg, force=force, kind=k) for k in wanted
+    ):
         log.info("板块归属：距上次同步不足 %s 天，跳过", cfg.get("industry.refresh_days", 7))
         return {}
 
-    nodes = client.fetch_tag_tree(wanted)
+    today = now().date()
+    week = (today - timedelta(days=(today.weekday() - 5) % 7)).isoformat()
+    if force or checkpoint.get("week") != week:
+        checkpoint = {}
+    nodes = checkpoint.get("nodes") or client.fetch_tag_tree(wanted)
     if not nodes:
         raise MairuiError("板块树为空，无法同步板块归属")
     by_kind: Dict[str, List[Dict[str, Any]]] = {}
@@ -91,23 +104,47 @@ def sync_tags(
         "、".join(f"{TAG_KINDS[k]} {len(v)}" for k, v in sorted(by_kind.items())),
     )
 
-    members, errors = client.fetch_tag_members_many(nodes, progress=progress)
+    members = checkpoint.get("members", {})
+    pending = [node for node in nodes if node["code"] not in members]
+    fresh, _ = client.fetch_tag_members_many(pending, progress=progress)
+    for code, items in fresh.items():
+        members[code] = [item["secid"] for item in items]
+    remaining = [node for node in nodes if node["code"] not in members]
+    if remaining or any(kind not in by_kind for kind in wanted):
+        # 只有整棵树完整才发布。没有返回的类别需要重新发现树。
+        if all(kind in by_kind for kind in wanted):
+            store.set_meta(
+                stage_key,
+                json.dumps(
+                    {"week": week, "nodes": nodes, "members": members},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+        raise MairuiError(f"板块归属不完整，缺 {len(remaining)} 个节点或类别，下次继续")
+    old = store.get_meta(META_KEY)
+    if old:
+        for kind in available:
+            if not store.get_meta(f"{META_KEY}:{kind}"):
+                store.set_meta(f"{META_KEY}:{kind}", old)
     written: Dict[str, int] = {}
     for kind, kind_nodes in by_kind.items():
         rows: List[Dict[str, Any]] = []
         for node in kind_nodes:
-            for item in members.get(str(node["code"]), []):
+            for secid in members[str(node["code"])]:
                 rows.append(
                     {
-                        "secid": item["secid"],
+                        "secid": secid,
                         "code": node["code"],
                         "name": node["name"],
                     }
                 )
         written[kind] = store.replace_symbol_tags(kind, rows)
-    if errors:
-        log.warning("板块归属：%s 个节点拉取失败（示例 %s）", len(errors), errors[:3])
-    store.set_meta(META_KEY, now_str())
+    store.set_meta(stage_key, "{}")
+    stamp = now_str()
+    for kind in written:
+        store.set_meta(f"{META_KEY}:{kind}", stamp)
+    store.set_meta(META_KEY, stamp)
     log.info(
         "板块归属完成：%s（股票数 %s）",
         "、".join(f"{TAG_KINDS[k]} {v} 行" for k, v in written.items()),

@@ -18,11 +18,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from time import time_ns
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .history import history_window
 from .indicators import compute_and_store
 from .mairui import MairuiClient, MairuiError, board_of, spot_trade_date
+from .request_cache import Receipts, annual_calendar
 from .store import Store
+from .tzutil import now_hm
 from .tzutil import shift
 from .tzutil import today as tz_today
 
@@ -64,6 +68,8 @@ def resolve_trade_days(
     start: str,
     end: Optional[str] = None,
     cfg=None,
+    store=None,
+    known_closed=None,
 ) -> List[str]:
     """取 ``[start, end]`` 之间的交易日（来自《交易日历》）。
 
@@ -76,7 +82,21 @@ def resolve_trade_days(
     years = list(range(int(start[:4]), int(end[:4]) + 1))
     days: List[str] = []
     try:
-        days = client.fetch_trade_calendar_span(years)
+        if store is None:
+            days = client.fetch_trade_calendar_span(years)
+        else:
+            for year in years:
+                official, complete = annual_calendar(store, client, year)
+                if (
+                    complete
+                    and known_closed is not None
+                    and official[0] < end < official[-1]
+                    and end not in official
+                ):
+                    known_closed.add(end)
+                days.extend(
+                    official or _weekdays(max(start, f"{year}-01-01"), min(end, f"{year}-12-31"))
+                )
     except Exception as exc:  # pragma: no cover - 日历异常时兜底
         log.warning("交易日历获取失败（%s），改用「周一~周五」估算交易日", exc)
     if not days:
@@ -228,20 +248,39 @@ def sync_bars(
     max_symbols: int = 0,
     full_beg: str = "0",
     progress=None,
+    use_cache=False,
 ) -> int:
     """按交易日历补齐日线缺口；没抓过的股票从 ``full_beg`` 开始回补。"""
     if not secids or not expected:
         return 0
     window_start = min(expected)
+    end = max(expected)
+    cache = Receipts(store) if use_cache else None
+    # 接口成功返回但某日仍空，可稍后重试。真实错误不写空回执。
+    deferred = cache.absent(window_start, end) if cache else {}
     have = store.bar_dates_by_secid(since=window_start)
-    jobs = _plan_jobs(
-        secids, expected, have, listed=store.listed_dates(), full_beg=str(full_beg or "0")
-    )
+    listed = store.listed_dates()
+    for secid, days in deferred.items():
+        have.setdefault(secid, set()).update(days)
+    jobs = _plan_jobs(secids, expected, have, listed=listed, full_beg=str(full_beg or "0"))
     todo = sum(len(group) for group in jobs.values())
     if not todo:
         log.info("日线数据完整（%s 只 / 窗口 %s 起），无需回补", len(secids), window_start)
         return 0
-    jobs, left = _cap_jobs(jobs, max_symbols)
+    if cache and max_symbols > 0 and todo > max_symbols:
+        attempts = dict(
+            store.conn.execute(
+                "SELECT substr(key,13),value FROM meta WHERE key LIKE 'bar_attempt:%'"
+            )
+        )
+        tasks = [(beg, s) for beg in _job_order(jobs) for s in jobs[beg]]
+        tasks.sort(key=lambda task: attempts.get(task[1], ""))
+        left = len(tasks) - max_symbols
+        jobs = {}
+        for beg, secid in tasks[:max_symbols]:
+            jobs.setdefault(beg, []).append(secid)
+    else:
+        jobs, left = _cap_jobs(jobs, max_symbols)
     todo = sum(len(group) for group in jobs.values())
     log.info(
         "日线缺口：%s 只需要回补（全历史 %s 只 / 断点续传 %s 只）%s",
@@ -253,14 +292,49 @@ def sync_bars(
     batch = max(1, int(cfg.get("mairui.backfill_batch", 400) or 400))
     shares = store.float_shares_map()
     written = 0
+    # 控制回执大小；长历史回补只记录日常核对窗口内的空日。
+    floor_recent = shift(end, -60)
+    history_start, _ = history_window(cfg, end)
+    recent = {day for day in expected if day >= floor_recent}
+    short_from = shift(tz_today(), -2)
     for beg in _job_order(jobs):
         group = jobs[beg]
         for start in range(0, len(group), batch):
             chunk = list(group[start : start + batch])
-            results, errors = client.fetch_kline_many(chunk, beg=beg, float_shares=shares)
+            if cache and max_symbols > 0:
+                stamp = str(time_ns())
+                with store.conn:
+                    store.conn.executemany(
+                        "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
+                        [("bar_attempt:" + s, stamp) for s in chunk],
+                    )
+            results, errors = client.fetch_kline_many(chunk, beg=beg, end=end, float_shares=shares)
             stats.errors.extend(errors)
-            rows = [row for result in results.values() for row in result]
-            written += store.upsert_bars(rows, refresh_days=False)
+            rows = [
+                row
+                for result in results.values()
+                for row in result
+                if (row.get("close") or 0) > 0
+                and (row.get("volume") or 0) > 0
+                and row["date"] <= end
+            ]
+            written += store.upsert_bars(rows, refresh_days=False, missing_only=True)
+            short, older = [], []
+            for secid, bars in results.items():
+                covered = have.get(secid, set()) | {r["date"] for r in bars}
+                floor = max(listed.get(secid) or "", beg)
+                for day in recent - covered:
+                    if day >= floor:
+                        (short if day >= short_from else older).append((secid, day))
+            if cache:
+                cache.put("bar-missing", short, 3600)
+                cache.put("bar-missing", older, 7 * 86400)
+            if beg <= history_start:
+                with store.conn:
+                    store.conn.executemany(
+                        "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
+                        [("history_checked:" + secid, end) for secid in results],
+                    )
             stats.bars_symbols += len(results)
             del results, rows
             if progress:
@@ -280,86 +354,74 @@ def sync_spot(
     force: bool = False,
 ) -> Optional[str]:
     """落当日快照；非交易日或数据未更新时返回 ``None``（不落库、不扫描）。"""
-    spot = client.fetch_spot(secids)
-    if not spot:
-        log.error("快照为空：检查证书配额/网络，或把 mairui.spot_mode 改成 more/single")
-        return None
-    # 全市场接口会把北交所等"不在本股票池里"的代码也带回来：按自己的股票池过滤
-    tracked = set(secids) if secids else None
-    if tracked:
-        outside = [row for row in spot if row["secid"] not in tracked]
-        if outside:
-            log.debug("快照里有 %s 只不在股票池中（如北交所），已忽略", len(outside))
-        spot = [row for row in spot if row["secid"] in tracked]
-    trade_date = spot_trade_date(spot) or tz_today()
-    today = tz_today()
-    if trade_date != today and not force:
-        log.warning(
-            "快照日期 %s ≠ 今天 %s：今天休市，或数据还没更新，本次不落库不扫描%s",
-            trade_date,
-            today,
-            _calendar_hint(client, today),
-        )
-        stats.skipped = "非交易日或数据未更新"
-        return None
-    # 时间戳来自每只股票。停牌前的最后报价不能盖上今天的日期。
-    dated = {}
-    for row in spot:
-        quote_day = spot_trade_date([row]) or row.get("date")
-        if quote_day == trade_date:
-            dated[row["secid"]] = row
-    spot = list(dated.values())
-    priced = [row for row in spot if (row.get("close") or 0) > 0 or (row.get("volume") or 0) > 0]
-    if not priced:
-        log.warning(
-            "快照日期是今天 %s，但价格/成交量全为 0：数据还没更新，跳过%s",
-            today,
-            _calendar_hint(client, today),
-        )
-        stats.skipped = "数据未更新"
-        return None
-
-    # 快照里带着流通市值，顺手把 symbols 的流通股本补齐（省掉一大堆 instrument 请求）
-    quotes = {row["secid"]: row for row in spot}
-    store.upsert_symbols(
-        [
-            {
-                "secid": secid,
-                "code": secid.split(".", 1)[1],
-                "float_shares": quotes[secid].get("float_shares"),
-            }
-            for secid in quotes
-            if quotes[secid].get("float_shares")
-        ]
-    )
-    bar_rows: List[Dict[str, Any]] = []
-    suspended = 0
-    for row in spot:
-        if (row.get("volume") or 0) <= 0 or (row.get("close") or 0) <= 0:
-            if row.get("volume") == 0:
-                suspended += 1
-            continue
-        bar_rows.append(dict(row, date=trade_date))
-    written = store.upsert_bars(bar_rows)
     from .readiness import code_version
 
-    store.record_run("spot_coverage", trade_date=trade_date, symbols=len(secids),
-                     params={"universe": len(set(secids)), "active": written,
-                             "no_trade": suspended, "reported": len(dated),
-                             "source": "dated_quotes", "code_version": code_version()})
-    store.refresh_trading_days()
+    today = tz_today()
+
+    pool = set(secids)
+    cache = Receipts(store) if pool and now_hm() >= "17:15" else None
+    verified = {}
+    if cache:
+        if force:
+            cache.clear_spot(today, pool)
+        else:
+            verified = {s: kind for s, kind in cache.final_spot(today).items() if s in pool}
+    needed = [s for s in dict.fromkeys(secids) if s not in verified]
+    spot = client.fetch_spot(needed) if needed or not pool else []
+    if pool:
+        wanted = set(needed)
+        spot = [r for r in spot if r["secid"] in wanted]
+    trade_date = (spot_trade_date(spot) or today) if force else today
+    dated = {r["secid"]: r for r in spot if (spot_trade_date([r]) or r.get("date")) == trade_date}
+    store.upsert_symbols(
+        [
+            {"secid": s, "code": s.split(".", 1)[1], "float_shares": row["float_shares"]}
+            for s, row in dated.items()
+            if row.get("float_shares")
+        ]
+    )
+    bars = [
+        dict(r, date=trade_date, source="spot")
+        for r in dated.values()
+        if (r.get("volume") or 0) > 0 and (r.get("close") or 0) > 0
+    ]
+    written = store.upsert_bars(bars)
     stats.bars_written += written
-    if not written:
-        # 有"价格"但没有成交量（例如演示证书/异常数据）：没有有效成交就不当新交易日
-        log.warning("快照日期 %s 没有任何有效成交（全是停牌/无成交），本次不落库不扫描", trade_date)
-        stats.skipped = "无有效成交数据"
+    active = {r["secid"] for r in bars} | {s for s, k in verified.items() if k == "spot-priced"}
+    # 日期可靠、成交量明确为零才能计入无成交。整批全零没有市场已更新的证据。
+    zero = {s for s, r in dated.items() if r.get("volume") == 0} if active else set()
+    if cache and trade_date == today:
+        cache.put("spot-priced", ((r["secid"], today) for r in bars), 2 * 3600)
+        cache.put("spot-zero", ((s, today) for s in zero), 3600)
+    no_trade = zero | {s for s, k in verified.items() if k == "spot-zero"}
+    missing = pool - active - no_trade
+    if missing:
+        stats.errors.append(("spot", f"{len(missing)} 只快照未确认"))
+    store.record_run(
+        "spot_coverage",
+        trade_date=trade_date,
+        symbols=len(pool),
+        params={
+            "universe": len(pool),
+            "active": len(active),
+            "no_trade": len(no_trade),
+            "reported": len(set(dated) | set(verified)),
+            "cached": len(verified),
+            "source": "dated_quotes",
+            "code_version": code_version(),
+        },
+    )
+    if not active:
+        stats.skipped = "非交易日或无当日有效成交"
         return None
     stats.trade_date = trade_date
     log.info(
-        "当日行情落库：%s 只 %s（停牌/无成交跳过 %s 只）",
-        written,
+        "盘后行情 %s：有效成交 %d、无成交 %d、未确认 %d、复用 %d",
         trade_date,
-        suspended,
+        len(active),
+        len(no_trade),
+        len(missing),
+        len(verified),
     )
     return trade_date
 
@@ -456,18 +518,6 @@ def sync_indicators(
     stats.indicators_written += written
     log.info("技术指标回补完成：%s 行", written)
     return written
-
-
-def _calendar_hint(client: MairuiClient, day: str) -> str:
-    """用《交易日历》把"是不是交易日"说清楚（只是日志信息，失败无所谓）。"""
-    try:
-        days = client.fetch_trade_calendar(day[:4])
-    except Exception as exc:  # 只是日志提示，任何异常都不该影响主流程
-        log.debug("交易日历获取失败：%s", exc)
-        return ""
-    if not days:
-        return ""
-    return f"（交易日历：{day} {'是' if day in days else '不是'}交易日）"
 
 
 def reconcile_window(cfg, days: Optional[int] = None) -> Tuple[str, str]:

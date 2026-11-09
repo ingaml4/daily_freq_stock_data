@@ -282,6 +282,17 @@ BAR_INSERT = (
     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
+# 已有有效收盘和成交量时保留原记录；旧库的无效占位允许用有效日线修复。
+BAR_FILL = (
+    BAR_INSERT.replace("OR REPLACE ", "")
+    + " ON CONFLICT(secid,date) DO UPDATE SET "
+    + ",".join(
+        f"{column}=excluded.{column}" for column in BAR_FIELDS if column not in ("secid", "date")
+    )
+    + " WHERE (COALESCE(bars.close,0)<=0 OR COALESCE(bars.volume,0)<=0) "
+    + "AND excluded.close>0 AND excluded.volume>0"
+)
+
 # 名称/流通股本等字段可能这次没抓到：用 COALESCE 保留库里已有的值，
 # 避免"只刷新行情、没带名称"把股票名字冲成空串。
 SYMBOL_INSERT = (
@@ -590,7 +601,7 @@ class Store:
             payload.append(_bar_tuple(row))
         if not payload:
             return 0
-        sql = BAR_INSERT.replace("OR REPLACE", "OR IGNORE") if missing_only else BAR_INSERT
+        sql = BAR_FILL if missing_only else BAR_INSERT
         cur = self.conn.executemany(sql, payload)
         self.conn.commit()
         if refresh_days:
@@ -1001,7 +1012,7 @@ class Store:
 
     def bar_dates_by_secid(self, since: Optional[str] = None) -> Dict[str, set]:
         """每只股票已有哪些交易日（用于和交易日历比对找缺口）。"""
-        return self._dates_by_secid("bars", since=since)
+        return self._dates_by_secid("bars", since=since, condition=" AND close>0 AND volume>0")
 
     def indicator_dates_by_secid(
         self, kind: Optional[str] = None, since: Optional[str] = None

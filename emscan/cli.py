@@ -369,7 +369,7 @@ def cmd_backfill(cfg: Config, args: argparse.Namespace) -> int:
     start, end = _window(cfg, args)
     if not getattr(args, "start", None):
         start = _history_start(cfg)
-    expected = resolve_trade_days(client, start, end, cfg)
+    expected = resolve_trade_days(client, start, end, cfg, store=store)
     sync_bars(
         store,
         client,
@@ -397,7 +397,7 @@ def cmd_sync(cfg: Config, args: argparse.Namespace) -> int:
     secids = sync_universe(store, client, cfg, stats)
     sync_float_shares(store, client, cfg, stats, secids, limit=_limit(args, cfg))
     start, end = _window(cfg, args)
-    expected = resolve_trade_days(client, start, end, cfg)
+    expected = resolve_trade_days(client, start, end, cfg, store=store)
     trade_date = sync_spot(store, client, cfg, stats, secids, force=getattr(args, "force", False))
     bars_expected = (
         _minus_unpublished_today(cfg, expected, "bars") if not trade_date else list(expected)
@@ -447,7 +447,7 @@ def cmd_update(cfg: Config, args: argparse.Namespace) -> int:
         log.info("symbols 表为空，先拉一次股票列表")
         secids = sync_universe(store, client, cfg, stats)
     start, end = _window(cfg, args)
-    expected = resolve_trade_days(client, start, end, cfg)
+    expected = resolve_trade_days(client, start, end, cfg, store=store)
     sync_bars(
         store,
         client,
@@ -487,7 +487,7 @@ def cmd_indicators(cfg: Config, args: argparse.Namespace) -> int:
     start, end = _window(cfg, args)
     if not getattr(args, "start", None):
         start = _history_start(cfg)
-    expected = resolve_trade_days(client, start, end, cfg)
+    expected = resolve_trade_days(client, start, end, cfg, store=store)
     started = time.time()
     sync_indicators(
         store,
@@ -1160,6 +1160,16 @@ def cmd_hits(cfg: Config, args: argparse.Namespace) -> int:
 
 # --------------------------------------------------------------------------- 每日入口
 def cmd_run(cfg: Config, args: argparse.Namespace) -> int:
+    from .request_cache import daily_lock
+
+    with daily_lock(cfg.path("store.path")) as acquired:
+        if not acquired:
+            log.info("同一行情库已有盘后 run 在执行，本次不重复发请求")
+            return 0
+        return _run_locked(cfg, args)
+
+
+def _run_locked(cfg: Config, args: argparse.Namespace) -> int:
     from .readiness import code_version
 
     day = tz_today()
@@ -1184,10 +1194,16 @@ def _daily_pipeline(cfg: Config, args: argparse.Namespace) -> int:
     started = time.time()
     stats = SyncStats()
     try:
+        start, end = _window(cfg, args)
+        known_closed = set()
+        expected = resolve_trade_days(
+            client, start, end, cfg, store=store, known_closed=known_closed
+        )
+        if end in known_closed and not getattr(args, "force", False):
+            log.info("%s 已由完整年度交易日历确认为休市，跳过日更", end)
+            return 0
         secids = sync_universe(store, client, cfg, stats)
         sync_float_shares(store, client, cfg, stats, secids, limit=_limit(args, cfg))
-        start, end = _window(cfg, args)
-        expected = resolve_trade_days(client, start, end, cfg)
         # 先落当日行情：它是最权威的"今天"（收盘后的快照），也能把今天从缺口里消掉，
         # 避免随后为了补"今天"给全市场各发一次 K 线请求。
         trade_date = sync_spot(
@@ -1203,6 +1219,7 @@ def _daily_pipeline(cfg: Config, args: argparse.Namespace) -> int:
             stats,
             secids,
             bars_expected,
+            use_cache=not getattr(args, "force", False),
             max_symbols=_limit(args, cfg),
             full_beg=_history_start(cfg),
             progress=_progress("日线"),
@@ -1212,7 +1229,13 @@ def _daily_pipeline(cfg: Config, args: argparse.Namespace) -> int:
             from .history import fill_history
 
             try:
-                sync_benchmarks(store, client, shift(trade_date, -45), trade_date)
+                sync_benchmarks(
+                    store,
+                    client,
+                    shift(trade_date, -45),
+                    trade_date,
+                    incremental=not getattr(args, "force", False),
+                )
             except Exception as exc:
                 log.warning("基准指数同步暂缓（%s），继续个股盘后任务", type(exc).__name__)
 

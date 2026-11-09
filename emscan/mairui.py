@@ -1059,18 +1059,37 @@ class MairuiClient:
                 log.warning("全市场快照接口不可用（%s）；没给股票池时无法降级", exc)
                 return []
 
-        if chosen in ("auto", "more"):
+        if chosen not in ("auto", "more"):
+            return self._fetch_quote_each(secids)
+
+        items = list(dict.fromkeys(secids))
+        rows = []
+        singles_left = 2 * self.multi_batch
+        empty_batches = 0
+        for start in range(0, len(items), self.multi_batch):
+            batch = items[start : start + self.multi_batch]
             try:
-                rows = self.fetch_quote_multi(secids)
+                result = self.fetch_quote_multi(batch)
+            except MairuiQuotaError:
                 if rows:
-                    return rows
-                log.warning("多股快照接口返回空数据，改逐只抓取")
-            except MairuiError as exc:
+                    log.warning("快照授权或限流阻断；保留已成功批次，停止请求")
+                    break
+                raise
+            except MairuiError:
                 if chosen == "more":
                     raise
-                log.warning("多股快照接口不可用（%s），改逐只抓取", exc)
-
-        return self._fetch_quote_each(secids)
+                result = []
+            received = {r["secid"] for r in result}
+            missing = [s for s in batch if s not in received][:singles_left]
+            if missing:
+                result = result + self._fetch_quote_each(missing)
+                singles_left -= len(missing)
+            rows.extend(result)
+            empty_batches = 0 if result else empty_batches + 1
+            if empty_batches >= 2:
+                log.warning("连续两批快照无数据，停止本轮请求")
+                break
+        return rows
 
     def _fetch_quote_each(self, secids: Sequence[str]) -> List[Dict[str, Any]]:
         rows: List[Dict[str, Any]] = []

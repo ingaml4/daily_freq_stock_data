@@ -47,7 +47,7 @@ def _fetch(client, dm, start, end, latest=False):
     return parse_rows(payload, dm, start, end, f"mairui.hsindex.{mode}.d")
 
 
-def sync_benchmarks(store, client, start: str, end: str) -> int:
+def sync_benchmarks(store, client, start: str, end: str, *, incremental=False) -> int:
     """抓取历史并补最后一个交易日。同一指数的迟到数据不会阻断其他指数。"""
     clock = now()
     if end > clock.date().isoformat() or (
@@ -63,9 +63,24 @@ def sync_benchmarks(store, client, start: str, end: str) -> int:
     expected.add(end)
     missing_codes = 0
     for dm in INDEX_CODES:
-        rows = _fetch(client, dm, start, end)
-        if end not in rows:
-            rows.update(_fetch(client, dm, end, end, latest=True))
+        absent = expected
+        if incremental:
+            present = {
+                r[0]
+                for r in store.conn.execute(
+                    "SELECT date FROM benchmark_bars WHERE code=? AND date BETWEEN ? AND ? "
+                    "AND close>0 AND prev_close>0",
+                    (dm[:6], start, end),
+                )
+            }
+            absent = expected - present
+            if not absent:
+                continue
+        first, last = (min(absent), max(absent)) if incremental else (start, end)
+        latest_first = incremental and first == last == end and end == clock.date().isoformat()
+        rows = _fetch(client, dm, first, last, latest=latest_first)
+        if end in absent and end not in rows:
+            rows.update(_fetch(client, dm, end, end, latest=not latest_first))
         with store.conn:
             store.conn.executemany(
                 "INSERT INTO benchmark_bars(code,date,close,prev_close,pct_chg,source) "
@@ -74,10 +89,13 @@ def sync_benchmarks(store, client, start: str, end: str) -> int:
                 "pct_chg=excluded.pct_chg,source=excluded.source",
                 rows.values(),
             )
-        have = {r[0] for r in store.conn.execute(
-            "SELECT date FROM benchmark_bars WHERE code=? AND date BETWEEN ? AND ?",
-            (dm[:6], start, end),
-        )}
+        have = {
+            r[0]
+            for r in store.conn.execute(
+                "SELECT date FROM benchmark_bars WHERE code=? AND date BETWEEN ? AND ? AND close>0 AND prev_close>0",
+                (dm[:6], start, end),
+            )
+        }
         absent = sorted(expected - have)
         if absent:
             missing_codes += 1
