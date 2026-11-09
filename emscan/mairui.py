@@ -167,6 +167,10 @@ class MairuiError(RuntimeError):
     """接口请求失败（重试后仍未成功），或证书无效/未配置。"""
 
 
+class MairuiQuotaError(MairuiError):
+    """接口限额、访问权限或凭证阻止请求，不应退化为逐股调用。"""
+
+
 # --------------------------------------------------------------------------- 基础转换
 def to_float(value: Any) -> Optional[float]:
     """把接口返回值转成 float；缺失值（None / '-' / ''）统一返回 None。"""
