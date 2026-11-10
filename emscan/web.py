@@ -267,6 +267,7 @@ TOP_TABS = (
     ("signals", "信号", "/"),
     ("summary", "当日总结", "/summary"),
     ("tiers", "梯队回测", "/tiers"),
+    ("strategy_review", "策略验证", "/strategy-review"),
 )
 
 TABS_CSS = """\
@@ -2039,6 +2040,23 @@ def make_handler(
                     status,
                     "application/json; charset=utf-8",
                 )
+                return
+
+            if path in ("/strategy-review", "/api/strategy-review", "/api/strategy-review/orders"):
+                from .strategy_review_web import render
+
+                with store_factory() as st:
+                    root = st.path.parent / "strategy-review"
+                target = root / ("orders.json" if path.endswith("/orders") else "report.json")
+                try:
+                    body = target.read_bytes()
+                    if path == "/strategy-review":
+                        body = render(json.loads(body)).encode("utf8")
+                except FileNotFoundError:
+                    self._send(b'{"error":"strategy_review_not_generated"}', 404, "application/json")
+                    return
+                ctype = "text/html; charset=utf-8" if path == "/strategy-review" else "application/json; charset=utf-8"
+                self._send(body, ctype=ctype)
                 return
 
             if path == "/api/readiness":
