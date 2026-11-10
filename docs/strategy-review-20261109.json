@@ -1,0 +1,1590 @@
+{
+  "version": "short-term-review-v1",
+  "source_code_version": "6ac5ce826669e03a4db08209cb3dec72f0e5bf92",
+  "policy_sha256": "17714af0a7d0bf3dbaeac011f8e25036e706fe80bab8a19822571cddb210207a",
+  "generated_at": "2026-11-10T06:51:50.382657+00:00",
+  "asof": "2026-11-09",
+  "policy": {
+    "primary_horizon": 5,
+    "max_candidates_per_day": 8,
+    "warmup_valid_bars": 120,
+    "development_fraction": 0.6,
+    "embargo_sessions": 5,
+    "minimum_test_dates": 60,
+    "minimum_closed_orders": 100,
+    "minimum_execution_coverage": 0.9,
+    "bootstrap_repetitions": 5000,
+    "bootstrap_block_sessions": 5,
+    "bootstrap_seed": 20261110,
+    "minimum_improvement_ci": 0.0,
+    "require_point_in_time_universe_and_industries": true
+  },
+  "provenance": {
+    "point_in_time_universe": false,
+    "point_in_time_industries": false,
+    "comparable_indicator_price_history": false,
+    "price_basis": "stored_qfq_history_plus_unadjusted_spot",
+    "data_version": "232",
+    "sector_tags_asof": "2026-11-06 17:17:37",
+    "signal_provenance": "historical_rule_reconstruction"
+  },
+  "coverage": {
+    "market_sessions": 179,
+    "signal_sessions": 54,
+    "start": "2026-08-10",
+    "end": "2026-10-30",
+    "test_start": "2026-10-08",
+    "test_end": "2026-10-30",
+    "test_sessions": 17
+  },
+  "arms": {
+    "baseline": {
+      "all": {
+        "selected": 432,
+        "closed": 109,
+        "execution_coverage": 0.2523148148148148,
+        "states": {
+          "unavailable": 322,
+          "closed": 109,
+          "entry_expired": 1
+        },
+        "mean_net_return": -0.002743624678899081,
+        "median_net_return": -0.01107212,
+        "win_rate": 0.46788990825688076,
+        "worst_trade": -0.27516348,
+        "mean_cost": 199.38844036697247,
+        "signal_dates_with_closed_orders": 14
+      },
+      "out_of_sample": {
+        "selected": 136,
+        "closed": 109,
+        "execution_coverage": 0.8014705882352942,
+        "states": {
+          "unavailable": 26,
+          "closed": 109,
+          "entry_expired": 1
+        },
+        "mean_net_return": -0.002743624678899081,
+        "median_net_return": -0.01107212,
+        "win_rate": 0.46788990825688076,
+        "worst_trade": -0.27516348,
+        "mean_cost": 199.38844036697247,
+        "signal_dates_with_closed_orders": 14
+      },
+      "out_of_sample_portfolio": {
+        "initial_capital": 800000.0,
+        "order_budget": 100000.0,
+        "max_positions": 8,
+        "net_return": 0.046767662499999973,
+        "max_drawdown": -0.06140596940065113,
+        "valuation_complete": true,
+        "execution_data_complete": false,
+        "valid_for_comparison": false,
+        "completed_trades": 23,
+        "open_positions": 0,
+        "blocked": {
+          "cash_or_slots": 87
+        },
+        "daily_equity": [
+          {
+            "date": "2026-10-08",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-09",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-12",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-13",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-14",
+            "equity": 785600.96,
+            "cash": 12535.96,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-15",
+            "equity": 770702.96,
+            "cash": 12535.96,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-16",
+            "equity": 778320.96,
+            "cash": 12535.96,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-19",
+            "equity": 797543.96,
+            "cash": 12535.96,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-20",
+            "equity": 805777.96,
+            "cash": 12535.96,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-21",
+            "equity": 811959.42,
+            "cash": 811959.42,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-22",
+            "equity": 810604.94,
+            "cash": 23916.94,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-23",
+            "equity": 836133.94,
+            "cash": 23916.94,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-26",
+            "equity": 836110.94,
+            "cash": 23916.94,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-27",
+            "equity": 836224.94,
+            "cash": 23916.94,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-28",
+            "equity": 848306.94,
+            "cash": 23916.94,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-29",
+            "equity": 811386.2,
+            "cash": 717270.2,
+            "holdings": 1
+          },
+          {
+            "date": "2026-10-30",
+            "equity": 796215.83,
+            "cash": 22824.83,
+            "holdings": 8
+          },
+          {
+            "date": "2026-11-02",
+            "equity": 806120.94,
+            "cash": 103590.94,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-03",
+            "equity": 802396.94,
+            "cash": 103590.94,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-04",
+            "equity": 831316.94,
+            "cash": 103590.94,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-05",
+            "equity": 849933.94,
+            "cash": 103590.94,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-06",
+            "equity": 837414.13,
+            "cash": 837414.13,
+            "holdings": 0
+          },
+          {
+            "date": "2026-11-09",
+            "equity": 837414.13,
+            "cash": 837414.13,
+            "holdings": 0
+          }
+        ],
+        "valuation_basis": "close_mark_open_inventory_not_liquidated"
+      },
+      "double_slippage_portfolio": {
+        "initial_capital": 800000.0,
+        "order_budget": 100000.0,
+        "max_positions": 8,
+        "net_return": 0.04394932500000004,
+        "max_drawdown": -0.062308859318959686,
+        "valuation_complete": true,
+        "execution_data_complete": false,
+        "valid_for_comparison": false,
+        "completed_trades": 23,
+        "open_positions": 0,
+        "blocked": {
+          "cash_or_slots": 87
+        },
+        "daily_equity": [
+          {
+            "date": "2026-10-08",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-09",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-12",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-13",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-14",
+            "equity": 785202.23,
+            "cash": 12698.23,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-15",
+            "equity": 770321.23,
+            "cash": 12698.23,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-16",
+            "equity": 777952.23,
+            "cash": 12698.23,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-19",
+            "equity": 797152.23,
+            "cash": 12698.23,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-20",
+            "equity": 805408.23,
+            "cash": 12698.23,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-21",
+            "equity": 811200.38,
+            "cash": 811200.38,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-22",
+            "equity": 809452.17,
+            "cash": 22764.17,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-23",
+            "equity": 834981.17,
+            "cash": 22764.17,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-26",
+            "equity": 834958.17,
+            "cash": 22764.17,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-27",
+            "equity": 835072.17,
+            "cash": 22764.17,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-28",
+            "equity": 847154.17,
+            "cash": 22764.17,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-29",
+            "equity": 809886.3,
+            "cash": 715770.3,
+            "holdings": 1
+          },
+          {
+            "date": "2026-10-30",
+            "equity": 794368.96,
+            "cash": 20977.96,
+            "holdings": 8
+          },
+          {
+            "date": "2026-11-02",
+            "equity": 804233.63,
+            "cash": 101703.63,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-03",
+            "equity": 800509.63,
+            "cash": 101703.63,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-04",
+            "equity": 829429.63,
+            "cash": 101703.63,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-05",
+            "equity": 848046.63,
+            "cash": 101703.63,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-06",
+            "equity": 835159.46,
+            "cash": 835159.46,
+            "holdings": 0
+          },
+          {
+            "date": "2026-11-09",
+            "equity": 835159.46,
+            "cash": 835159.46,
+            "holdings": 0
+          }
+        ],
+        "valuation_basis": "close_mark_open_inventory_not_liquidated"
+      }
+    },
+    "setups": {
+      "all": {
+        "selected": 432,
+        "closed": 74,
+        "execution_coverage": 0.1712962962962963,
+        "states": {
+          "unavailable": 355,
+          "closed": 74,
+          "entry_expired": 2,
+          "pending_exit": 1
+        },
+        "mean_net_return": -0.037313767297297296,
+        "median_net_return": -0.054212515,
+        "win_rate": 0.35135135135135137,
+        "worst_trade": -0.36763285,
+        "mean_cost": 195.27891891891895,
+        "signal_dates_with_closed_orders": 11
+      },
+      "out_of_sample": {
+        "selected": 136,
+        "closed": 74,
+        "execution_coverage": 0.5441176470588235,
+        "states": {
+          "unavailable": 59,
+          "closed": 74,
+          "entry_expired": 2,
+          "pending_exit": 1
+        },
+        "mean_net_return": -0.037313767297297296,
+        "median_net_return": -0.054212515,
+        "win_rate": 0.35135135135135137,
+        "worst_trade": -0.36763285,
+        "mean_cost": 195.27891891891895,
+        "signal_dates_with_closed_orders": 11
+      },
+      "out_of_sample_portfolio": {
+        "initial_capital": 800000.0,
+        "order_budget": 100000.0,
+        "max_positions": 8,
+        "net_return": -0.04003092499999994,
+        "max_drawdown": -0.13012607660016884,
+        "valuation_complete": true,
+        "execution_data_complete": false,
+        "valid_for_comparison": false,
+        "completed_trades": 16,
+        "open_positions": 1,
+        "blocked": {
+          "cash_or_slots": 56,
+          "already_held": 3
+        },
+        "daily_equity": [
+          {
+            "date": "2026-10-08",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-09",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-12",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-13",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-14",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-15",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-16",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-19",
+            "equity": 790787.67,
+            "cash": 407170.67,
+            "holdings": 4
+          },
+          {
+            "date": "2026-10-20",
+            "equity": 790907.78,
+            "cash": 116311.78,
+            "holdings": 7
+          },
+          {
+            "date": "2026-10-21",
+            "equity": 803248.39,
+            "cash": 17036.39,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-22",
+            "equity": 806483.39,
+            "cash": 17036.39,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-23",
+            "equity": 831945.39,
+            "cash": 17036.39,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-26",
+            "equity": 832982.66,
+            "cash": 388571.66,
+            "holdings": 4
+          },
+          {
+            "date": "2026-10-27",
+            "equity": 836909.53,
+            "cash": 433694.53,
+            "holdings": 4
+          },
+          {
+            "date": "2026-10-28",
+            "equity": 842583.0,
+            "cash": 128719.0,
+            "holdings": 7
+          },
+          {
+            "date": "2026-10-29",
+            "equity": 801912.07,
+            "cash": 28743.07,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-30",
+            "equity": 774058.07,
+            "cash": 28743.07,
+            "holdings": 8
+          },
+          {
+            "date": "2026-11-02",
+            "equity": 758076.07,
+            "cash": 28743.07,
+            "holdings": 8
+          },
+          {
+            "date": "2026-11-03",
+            "equity": 746789.78,
+            "cash": 243770.78,
+            "holdings": 6
+          },
+          {
+            "date": "2026-11-04",
+            "equity": 732940.98,
+            "cash": 556698.98,
+            "holdings": 2
+          },
+          {
+            "date": "2026-11-05",
+            "equity": 746771.26,
+            "cash": 646052.26,
+            "holdings": 1
+          },
+          {
+            "date": "2026-11-06",
+            "equity": 756815.26,
+            "cash": 646052.26,
+            "holdings": 1
+          },
+          {
+            "date": "2026-11-09",
+            "equity": 767975.26,
+            "cash": 646052.26,
+            "holdings": 1
+          }
+        ],
+        "valuation_basis": "close_mark_open_inventory_not_liquidated"
+      },
+      "double_slippage_portfolio": {
+        "initial_capital": 800000.0,
+        "order_budget": 100000.0,
+        "max_positions": 8,
+        "net_return": -0.04194891249999999,
+        "max_drawdown": -0.13051310577426833,
+        "valuation_complete": true,
+        "execution_data_complete": false,
+        "valid_for_comparison": false,
+        "completed_trades": 16,
+        "open_positions": 1,
+        "blocked": {
+          "cash_or_slots": 56,
+          "already_held": 3
+        },
+        "daily_equity": [
+          {
+            "date": "2026-10-08",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-09",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-12",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-13",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-14",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-15",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-16",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-19",
+            "equity": 790591.41,
+            "cash": 406974.41,
+            "holdings": 4
+          },
+          {
+            "date": "2026-10-20",
+            "equity": 790566.2,
+            "cash": 115970.2,
+            "holdings": 7
+          },
+          {
+            "date": "2026-10-21",
+            "equity": 802857.21,
+            "cash": 16645.21,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-22",
+            "equity": 806092.21,
+            "cash": 16645.21,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-23",
+            "equity": 831554.21,
+            "cash": 16645.21,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-26",
+            "equity": 832405.47,
+            "cash": 387994.47,
+            "holdings": 4
+          },
+          {
+            "date": "2026-10-27",
+            "equity": 836014.19,
+            "cash": 432799.19,
+            "holdings": 4
+          },
+          {
+            "date": "2026-10-28",
+            "equity": 841441.32,
+            "cash": 127577.32,
+            "holdings": 7
+          },
+          {
+            "date": "2026-10-29",
+            "equity": 800795.14,
+            "cash": 28903.14,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-30",
+            "equity": 773069.14,
+            "cash": 28903.14,
+            "holdings": 8
+          },
+          {
+            "date": "2026-11-02",
+            "equity": 757086.14,
+            "cash": 28903.14,
+            "holdings": 8
+          },
+          {
+            "date": "2026-11-03",
+            "equity": 745717.2,
+            "cash": 243823.2,
+            "holdings": 6
+          },
+          {
+            "date": "2026-11-04",
+            "equity": 731622.2,
+            "cash": 556853.2,
+            "holdings": 2
+          },
+          {
+            "date": "2026-11-05",
+            "equity": 745312.87,
+            "cash": 644954.87,
+            "holdings": 1
+          },
+          {
+            "date": "2026-11-06",
+            "equity": 755320.87,
+            "cash": 644954.87,
+            "holdings": 1
+          },
+          {
+            "date": "2026-11-09",
+            "equity": 766440.87,
+            "cash": 644954.87,
+            "holdings": 1
+          }
+        ],
+        "valuation_basis": "close_mark_open_inventory_not_liquidated"
+      },
+      "promotion": {
+        "approved": false,
+        "reasons": [
+          "historical_universe_and_status_unverified",
+          "historical_industry_membership_unverified",
+          "indicator_price_basis_unverified",
+          "insufficient_out_of_sample_dates",
+          "insufficient_closed_orders",
+          "insufficient_execution_coverage",
+          "net_improvement_not_established",
+          "baseline_evidence_insufficient",
+          "portfolio_drawdown_validation_pending",
+          "double_slippage_stress_not_passed"
+        ]
+      }
+    },
+    "setups_sector": {
+      "all": {
+        "selected": 432,
+        "closed": 70,
+        "execution_coverage": 0.16203703703703703,
+        "states": {
+          "unavailable": 359,
+          "closed": 70,
+          "entry_expired": 2,
+          "pending_exit": 1
+        },
+        "mean_net_return": -0.03789713528571429,
+        "median_net_return": -0.040022175,
+        "win_rate": 0.3142857142857143,
+        "worst_trade": -0.36763285,
+        "mean_cost": 194.7187142857143,
+        "signal_dates_with_closed_orders": 10
+      },
+      "out_of_sample": {
+        "selected": 136,
+        "closed": 70,
+        "execution_coverage": 0.5147058823529411,
+        "states": {
+          "unavailable": 63,
+          "closed": 70,
+          "entry_expired": 2,
+          "pending_exit": 1
+        },
+        "mean_net_return": -0.03789713528571429,
+        "median_net_return": -0.040022175,
+        "win_rate": 0.3142857142857143,
+        "worst_trade": -0.36763285,
+        "mean_cost": 194.7187142857143,
+        "signal_dates_with_closed_orders": 10
+      },
+      "out_of_sample_portfolio": {
+        "initial_capital": 800000.0,
+        "order_budget": 100000.0,
+        "max_positions": 8,
+        "net_return": -0.0830082124999999,
+        "max_drawdown": -0.17022091249999993,
+        "valuation_complete": true,
+        "execution_data_complete": false,
+        "valid_for_comparison": false,
+        "completed_trades": 15,
+        "open_positions": 1,
+        "blocked": {
+          "cash_or_slots": 54,
+          "already_held": 1
+        },
+        "daily_equity": [
+          {
+            "date": "2026-10-08",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-09",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-12",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-13",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-14",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-15",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-16",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-19",
+            "equity": 797076.49,
+            "cash": 703206.49,
+            "holdings": 1
+          },
+          {
+            "date": "2026-10-20",
+            "equity": 796776.49,
+            "cash": 703206.49,
+            "holdings": 1
+          },
+          {
+            "date": "2026-10-21",
+            "equity": 790862.7,
+            "cash": 12158.7,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-22",
+            "equity": 757011.7,
+            "cash": 12158.7,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-23",
+            "equity": 773885.7,
+            "cash": 12158.7,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-26",
+            "equity": 753467.49,
+            "cash": 100307.49,
+            "holdings": 7
+          },
+          {
+            "date": "2026-10-27",
+            "equity": 731717.71,
+            "cash": 1832.71,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-28",
+            "equity": 734138.47,
+            "cash": 636938.47,
+            "holdings": 1
+          },
+          {
+            "date": "2026-10-29",
+            "equity": 713629.46,
+            "cash": 41749.46,
+            "holdings": 7
+          },
+          {
+            "date": "2026-10-30",
+            "equity": 673369.46,
+            "cash": 41749.46,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-02",
+            "equity": 680250.46,
+            "cash": 41749.46,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-03",
+            "equity": 663823.27,
+            "cash": 130677.27,
+            "holdings": 6
+          },
+          {
+            "date": "2026-11-04",
+            "equity": 679264.36,
+            "cash": 30719.36,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-05",
+            "equity": 712389.43,
+            "cash": 611670.43,
+            "holdings": 1
+          },
+          {
+            "date": "2026-11-06",
+            "equity": 722433.43,
+            "cash": 611670.43,
+            "holdings": 1
+          },
+          {
+            "date": "2026-11-09",
+            "equity": 733593.43,
+            "cash": 611670.43,
+            "holdings": 1
+          }
+        ],
+        "valuation_basis": "close_mark_open_inventory_not_liquidated"
+      },
+      "double_slippage_portfolio": {
+        "initial_capital": 800000.0,
+        "order_budget": 100000.0,
+        "max_positions": 8,
+        "net_return": -0.08478483749999999,
+        "max_drawdown": -0.1713710249999999,
+        "valuation_complete": true,
+        "execution_data_complete": false,
+        "valid_for_comparison": false,
+        "completed_trades": 15,
+        "open_positions": 1,
+        "blocked": {
+          "cash_or_slots": 54,
+          "already_held": 1
+        },
+        "daily_equity": [
+          {
+            "date": "2026-10-08",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-09",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-12",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-13",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-14",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-15",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-16",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-19",
+            "equity": 797028.13,
+            "cash": 703158.13,
+            "holdings": 1
+          },
+          {
+            "date": "2026-10-20",
+            "equity": 796728.13,
+            "cash": 703158.13,
+            "holdings": 1
+          },
+          {
+            "date": "2026-10-21",
+            "equity": 790469.07,
+            "cash": 11765.07,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-22",
+            "equity": 756618.07,
+            "cash": 11765.07,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-23",
+            "equity": 773492.07,
+            "cash": 11765.07,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-26",
+            "equity": 753029.73,
+            "cash": 99869.73,
+            "holdings": 7
+          },
+          {
+            "date": "2026-10-27",
+            "equity": 731230.75,
+            "cash": 1345.75,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-28",
+            "equity": 733333.56,
+            "cash": 636133.56,
+            "holdings": 1
+          },
+          {
+            "date": "2026-10-29",
+            "equity": 712601.89,
+            "cash": 41998.89,
+            "holdings": 7
+          },
+          {
+            "date": "2026-10-30",
+            "equity": 672469.89,
+            "cash": 41998.89,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-02",
+            "equity": 679349.89,
+            "cash": 41998.89,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-03",
+            "equity": 662903.18,
+            "cash": 130882.18,
+            "holdings": 6
+          },
+          {
+            "date": "2026-11-04",
+            "equity": 678304.78,
+            "cash": 31232.78,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-05",
+            "equity": 711044.13,
+            "cash": 610686.13,
+            "holdings": 1
+          },
+          {
+            "date": "2026-11-06",
+            "equity": 721052.13,
+            "cash": 610686.13,
+            "holdings": 1
+          },
+          {
+            "date": "2026-11-09",
+            "equity": 732172.13,
+            "cash": 610686.13,
+            "holdings": 1
+          }
+        ],
+        "valuation_basis": "close_mark_open_inventory_not_liquidated"
+      },
+      "promotion": {
+        "approved": false,
+        "reasons": [
+          "historical_universe_and_status_unverified",
+          "historical_industry_membership_unverified",
+          "indicator_price_basis_unverified",
+          "insufficient_out_of_sample_dates",
+          "insufficient_closed_orders",
+          "insufficient_execution_coverage",
+          "net_improvement_not_established",
+          "baseline_evidence_insufficient",
+          "portfolio_drawdown_validation_pending",
+          "double_slippage_stress_not_passed"
+        ]
+      }
+    },
+    "setups_sector_exit": {
+      "all": {
+        "selected": 432,
+        "closed": 70,
+        "execution_coverage": 0.16203703703703703,
+        "states": {
+          "unavailable": 359,
+          "closed": 70,
+          "entry_expired": 2,
+          "pending_exit": 1
+        },
+        "mean_net_return": -0.03765168942857143,
+        "median_net_return": -0.040022175,
+        "win_rate": 0.3142857142857143,
+        "worst_trade": -0.36763285,
+        "mean_cost": 194.75171428571429,
+        "signal_dates_with_closed_orders": 10
+      },
+      "out_of_sample": {
+        "selected": 136,
+        "closed": 70,
+        "execution_coverage": 0.5147058823529411,
+        "states": {
+          "unavailable": 63,
+          "closed": 70,
+          "entry_expired": 2,
+          "pending_exit": 1
+        },
+        "mean_net_return": -0.03765168942857143,
+        "median_net_return": -0.040022175,
+        "win_rate": 0.3142857142857143,
+        "worst_trade": -0.36763285,
+        "mean_cost": 194.75171428571429,
+        "signal_dates_with_closed_orders": 10
+      },
+      "out_of_sample_portfolio": {
+        "initial_capital": 800000.0,
+        "order_budget": 100000.0,
+        "max_positions": 8,
+        "net_return": -0.0830082124999999,
+        "max_drawdown": -0.17022091249999993,
+        "valuation_complete": true,
+        "execution_data_complete": false,
+        "valid_for_comparison": false,
+        "completed_trades": 15,
+        "open_positions": 1,
+        "blocked": {
+          "cash_or_slots": 54,
+          "already_held": 1
+        },
+        "daily_equity": [
+          {
+            "date": "2026-10-08",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-09",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-12",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-13",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-14",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-15",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-16",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-19",
+            "equity": 797076.49,
+            "cash": 703206.49,
+            "holdings": 1
+          },
+          {
+            "date": "2026-10-20",
+            "equity": 796776.49,
+            "cash": 703206.49,
+            "holdings": 1
+          },
+          {
+            "date": "2026-10-21",
+            "equity": 790862.7,
+            "cash": 12158.7,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-22",
+            "equity": 757011.7,
+            "cash": 12158.7,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-23",
+            "equity": 773885.7,
+            "cash": 12158.7,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-26",
+            "equity": 753467.49,
+            "cash": 100307.49,
+            "holdings": 7
+          },
+          {
+            "date": "2026-10-27",
+            "equity": 731717.71,
+            "cash": 1832.71,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-28",
+            "equity": 734138.47,
+            "cash": 636938.47,
+            "holdings": 1
+          },
+          {
+            "date": "2026-10-29",
+            "equity": 713629.46,
+            "cash": 41749.46,
+            "holdings": 7
+          },
+          {
+            "date": "2026-10-30",
+            "equity": 673369.46,
+            "cash": 41749.46,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-02",
+            "equity": 680250.46,
+            "cash": 41749.46,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-03",
+            "equity": 663823.27,
+            "cash": 130677.27,
+            "holdings": 6
+          },
+          {
+            "date": "2026-11-04",
+            "equity": 679264.36,
+            "cash": 30719.36,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-05",
+            "equity": 712389.43,
+            "cash": 611670.43,
+            "holdings": 1
+          },
+          {
+            "date": "2026-11-06",
+            "equity": 722433.43,
+            "cash": 611670.43,
+            "holdings": 1
+          },
+          {
+            "date": "2026-11-09",
+            "equity": 733593.43,
+            "cash": 611670.43,
+            "holdings": 1
+          }
+        ],
+        "valuation_basis": "close_mark_open_inventory_not_liquidated"
+      },
+      "double_slippage_portfolio": {
+        "initial_capital": 800000.0,
+        "order_budget": 100000.0,
+        "max_positions": 8,
+        "net_return": -0.08478483749999999,
+        "max_drawdown": -0.1713710249999999,
+        "valuation_complete": true,
+        "execution_data_complete": false,
+        "valid_for_comparison": false,
+        "completed_trades": 15,
+        "open_positions": 1,
+        "blocked": {
+          "cash_or_slots": 54,
+          "already_held": 1
+        },
+        "daily_equity": [
+          {
+            "date": "2026-10-08",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-09",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-12",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-13",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-14",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-15",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-16",
+            "equity": 800000.0,
+            "cash": 800000.0,
+            "holdings": 0
+          },
+          {
+            "date": "2026-10-19",
+            "equity": 797028.13,
+            "cash": 703158.13,
+            "holdings": 1
+          },
+          {
+            "date": "2026-10-20",
+            "equity": 796728.13,
+            "cash": 703158.13,
+            "holdings": 1
+          },
+          {
+            "date": "2026-10-21",
+            "equity": 790469.07,
+            "cash": 11765.07,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-22",
+            "equity": 756618.07,
+            "cash": 11765.07,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-23",
+            "equity": 773492.07,
+            "cash": 11765.07,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-26",
+            "equity": 753029.73,
+            "cash": 99869.73,
+            "holdings": 7
+          },
+          {
+            "date": "2026-10-27",
+            "equity": 731230.75,
+            "cash": 1345.75,
+            "holdings": 8
+          },
+          {
+            "date": "2026-10-28",
+            "equity": 733333.56,
+            "cash": 636133.56,
+            "holdings": 1
+          },
+          {
+            "date": "2026-10-29",
+            "equity": 712601.89,
+            "cash": 41998.89,
+            "holdings": 7
+          },
+          {
+            "date": "2026-10-30",
+            "equity": 672469.89,
+            "cash": 41998.89,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-02",
+            "equity": 679349.89,
+            "cash": 41998.89,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-03",
+            "equity": 662903.18,
+            "cash": 130882.18,
+            "holdings": 6
+          },
+          {
+            "date": "2026-11-04",
+            "equity": 678304.78,
+            "cash": 31232.78,
+            "holdings": 7
+          },
+          {
+            "date": "2026-11-05",
+            "equity": 711044.13,
+            "cash": 610686.13,
+            "holdings": 1
+          },
+          {
+            "date": "2026-11-06",
+            "equity": 721052.13,
+            "cash": 610686.13,
+            "holdings": 1
+          },
+          {
+            "date": "2026-11-09",
+            "equity": 732172.13,
+            "cash": 610686.13,
+            "holdings": 1
+          }
+        ],
+        "valuation_basis": "close_mark_open_inventory_not_liquidated"
+      },
+      "promotion": {
+        "approved": false,
+        "reasons": [
+          "historical_universe_and_status_unverified",
+          "historical_industry_membership_unverified",
+          "indicator_price_basis_unverified",
+          "insufficient_out_of_sample_dates",
+          "insufficient_closed_orders",
+          "insufficient_execution_coverage",
+          "net_improvement_not_established",
+          "baseline_evidence_insufficient",
+          "portfolio_drawdown_validation_pending",
+          "double_slippage_stress_not_passed"
+        ]
+      }
+    }
+  },
+  "out_of_sample_differences": {
+    "setups": {
+      "common_signal_dates": 11,
+      "mean_daily_difference": -0.03068451735930737,
+      "simultaneous_95pct_interval": [
+        -0.06304600223901437,
+        0.018601471887755096
+      ],
+      "unit": "decimal_return",
+      "limitation": "conditional_on_comparable_closed_orders",
+      "block_sessions": 5
+    },
+    "setups_sector": {
+      "common_signal_dates": 10,
+      "mean_daily_difference": -0.04261661298214285,
+      "simultaneous_95pct_interval": [
+        -0.09155480625,
+        -0.01577588531584791
+      ],
+      "unit": "decimal_return",
+      "limitation": "conditional_on_comparable_closed_orders",
+      "block_sessions": 5
+    },
+    "setups_sector_exit": {
+      "common_signal_dates": 10,
+      "mean_daily_difference": -0.04230121894642856,
+      "simultaneous_95pct_interval": [
+        -0.09155480625,
+        -0.01475993308673469
+      ],
+      "unit": "decimal_return",
+      "limitation": "conditional_on_comparable_closed_orders",
+      "block_sessions": 5
+    }
+  },
+  "portfolio_differences": {
+    "setups": {
+      "market_sessions": 23,
+      "mean_daily_difference": -0.0037715017717180627,
+      "simultaneous_95pct_interval": [
+        -0.014321899847696596,
+        0.004624737523107717
+      ],
+      "block_sessions": 5,
+      "unit": "decimal_daily_portfolio_return"
+    },
+    "setups_sector": {
+      "market_sessions": 23,
+      "mean_daily_difference": -0.0056487283558396325,
+      "simultaneous_95pct_interval": [
+        -0.018418405231138094,
+        0.006938708424720801
+      ],
+      "block_sessions": 5,
+      "unit": "decimal_daily_portfolio_return"
+    },
+    "setups_sector_exit": {
+      "market_sessions": 23,
+      "mean_daily_difference": -0.0056487283558396325,
+      "simultaneous_95pct_interval": [
+        -0.018418405231138094,
+        0.006938708424720801
+      ],
+      "block_sessions": 5,
+      "unit": "decimal_daily_portfolio_return"
+    }
+  },
+  "approved_strategies": [],
+  "conclusion": "insufficient_evidence",
+  "live_selection_changed": false,
+  "execution_parameters": {
+    "capital": 100000.0,
+    "commission_bps": 2.5,
+    "min_commission": 5.0,
+    "transfer_bps": 0.1,
+    "sell_tax_bps": 5.0,
+    "slippage_bps": 5.0,
+    "entry_wait": 3
+  },
+  "published_ai_reference": {
+    "selected": 201,
+    "closed": 133,
+    "execution_coverage": 0.6616915422885572,
+    "states": {
+      "pending_entry": 18,
+      "pending_exit": 43,
+      "unavailable": 7,
+      "closed": 133
+    },
+    "mean_net_return": -0.011762986015037594,
+    "median_net_return": -0.02224796,
+    "win_rate": 0.37593984962406013,
+    "worst_trade": -0.27516348,
+    "mean_cost": 198.90165413533836,
+    "signal_dates_with_closed_orders": 9,
+    "role": "published_list_reference_only",
+    "comparison_warning": "different_dates_and_ai_selection_not_paired_to_reconstructed_rules"
+  },
+  "comparison_unit": "independent_order_statistics_and_separate_800000_cny_shared_cash_portfolios",
+  "limitations": [
+    "current_surviving_universe",
+    "current_industry_tags",
+    "historical_price_basis_mixed",
+    "unavailable_executions_are_censored_not_zero_returns",
+    "overlapping_5day_holds",
+    "short_out_of_sample"
+  ]
+}
