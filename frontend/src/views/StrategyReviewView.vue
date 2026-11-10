@@ -9,7 +9,7 @@ import {
   NTag,
   type DataTableColumns,
 } from "naive-ui";
-import { getJson } from "../api";
+import { ApiError, getJson } from "../api";
 import PageState from "../components/PageState.vue";
 import {
   change,
@@ -208,7 +208,10 @@ async function load() {
       current.signal,
     );
   } catch (e) {
-    if (!current.signal.aborted) error.value = message(e);
+    if (!current.signal.aborted) {
+      if (e instanceof ApiError && e.status === 404) data.value = null;
+      else error.value = message(e);
+    }
   } finally {
     if (!current.signal.aborted) loading.value = false;
   }

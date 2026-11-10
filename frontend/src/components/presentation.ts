@@ -40,7 +40,12 @@ export function change(value: unknown, fractional = true, digits = 2) {
 export function localTime(value: string | null | undefined): string {
   if (!value) return "尚未记录";
   if (!/[TZ+]/.test(value)) return value;
-  const parsed = new Date(value);
+  const timestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(
+    value,
+  )
+    ? value + "+08:00"
+    : value;
+  const parsed = new Date(timestamp);
   if (!Number.isFinite(parsed.getTime())) return value;
   return parsed.toLocaleString("zh-CN", {
     timeZone: "Asia/Shanghai",
