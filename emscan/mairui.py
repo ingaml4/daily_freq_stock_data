@@ -1036,8 +1036,7 @@ class MairuiClient:
         return sorted(set(days))
 
     # --------------------------------------------------------- 实时行情快照
-    def fetch_order_book(self, secid: str) -> Any:
-        """当前五档原始回包；一次 GET，不跟随重定向，不重试。"""
+    def _fetch_current_stock(self, path: str, secid: str) -> Any:
         market, sep, code = secid.partition(".")
         if (
             market not in ("0", "1")
@@ -1047,8 +1046,16 @@ class MairuiClient:
             or not code.isdigit()
         ):
             raise ValueError("非法股票代码")
-        url = self._url(f"/hsstock/real/five/{code}/{self._require_licence()}")
+        url = self._url(f"/{path}/{code}/{self._require_licence()}")
         return self._get_json(url, one_attempt=True)
+
+    def fetch_order_book(self, secid: str) -> Any:
+        """当前五档原始回包；一次 GET，不跟随重定向，不重试。"""
+        return self._fetch_current_stock("hsstock/real/five", secid)
+
+    def fetch_trade_ticks(self, secid: str) -> Any:
+        """当天逐笔原始数组，供应商交易时段约每 60 分钟更新；仅发一次 GET。"""
+        return self._fetch_current_stock("hsrl/zbjy", secid)
 
     def fetch_quote_all(self) -> List[Dict[str, Any]]:
         """全市场实时行情（``hsrl/real/all``，一次请求拿到所有股票）。"""

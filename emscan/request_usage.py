@@ -19,6 +19,7 @@ _ROUTES = {
     ("hsrl", "real", "all"): "hsrl.real.all",
     ("hsrl", "ssjy_more"): "hsrl.ssjy_more",
     ("hsrl", "ssjy"): "hsrl.ssjy",
+    ("hsrl", "zbjy"): "hsrl.zbjy",
     ("hsstock", "history"): "hsstock.history.kline",
     ("hsstock", "real", "five"): "hsstock.real.five",
     ("hsstock", "latest"): "hsstock.latest",

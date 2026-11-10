@@ -148,8 +148,8 @@ def _iso(stamp):
     return stamp.isoformat(timespec="microseconds")
 
 
-class AuctionBookService:
-    """fetch(secid) 只调用当前五档。短缓存及同股并发请求合并在实例内共享。"""
+class CurrentSnapshotService:
+    """单次行情快照的交易时段、每股缓存、并发合并及实例用量上限。"""
 
     def __init__(self, fetch, *, clock=tzutil.now, ttl_seconds=10, cache_size=512, per_minute=60):
         self.fetch = fetch
@@ -234,31 +234,19 @@ class AuctionBookService:
         phase = _phase(end, is_trading_day if end.date() == start.date() else None)
         items = []
         for symbol, secid, received, payload, reason, requested, cached in frames:
-            raw, stamp, quality, book_reason = _book(payload, end, received, phase)
+            details = self._details(payload, end, received, phase)
             items.append(
                 {
+                    **details,
                     "symbol": symbol,
                     "secid": secid,
                     "phase": phase,
                     "received_at": _iso(received),
-                    "t": raw.get("t"),
-                    "source_time": _iso(stamp) if stamp else None,
                     "source": "mairui",
-                    "source_endpoint": ENDPOINT,
+                    "source_endpoint": self.endpoint,
                     "upstream_requested": requested,
                     "cached": cached,
-                    "book_quality": quality,
-                    "reason": reason or book_reason,
-                    "raw": raw,
-                    "volume_unit": "lot",
-                    "shares_per_lot": 100,
-                    "unit_source": UNIT_SOURCE,
-                    "quality": "gap",
-                    "auction_reason": "virtual_match_fields_unverified",
-                    "indicative_match_price": None,
-                    "matched_volume": None,
-                    "unmatched_volume": None,
-                    "unmatched_direction": None,
+                    "reason": reason or details["reason"],
                 }
             )
         return {
@@ -272,4 +260,29 @@ class AuctionBookService:
             "phase": phase,
             "timezone": "Asia/Shanghai",
             "items": items,
+        }
+
+
+class AuctionBookService(CurrentSnapshotService):
+    """fetch(secid) 返回当前五档。"""
+
+    endpoint = ENDPOINT
+
+    def _details(self, payload, end, received, phase):
+        raw, stamp, quality, book_reason = _book(payload, end, received, phase)
+        return {
+            "t": raw.get("t"),
+            "source_time": _iso(stamp) if stamp else None,
+            "book_quality": quality,
+            "reason": book_reason,
+            "raw": raw,
+            "volume_unit": "lot",
+            "shares_per_lot": 100,
+            "unit_source": UNIT_SOURCE,
+            "quality": "gap",
+            "auction_reason": "virtual_match_fields_unverified",
+            "indicative_match_price": None,
+            "matched_volume": None,
+            "unmatched_volume": None,
+            "unmatched_direction": None,
         }
