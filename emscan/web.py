@@ -32,6 +32,7 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlencode, parse_qs, quote, urlparse
@@ -606,6 +607,10 @@ class PageContext:
             "cache_written": self.cache_written,
             "update_note": self.update_note,
             "rows": self.rows,
+            "title": self.title,
+            "error": self.error,
+            "limit": self.limit,
+            "columns": list(VIEW_COLUMNS.get(self.view, BASE_COLUMNS)),
         }
 
 
@@ -1864,6 +1869,7 @@ def make_handler(
     backtest_cfg: Any = None,
     auction_service=None,
     ticks_service=None,
+    frontend_dist=None,
 ) -> type:
     """生成一个 ``BaseHTTPRequestHandler`` 子类。
 
@@ -1887,6 +1893,7 @@ def make_handler(
     （``curl -u ":$口令"``）方便脚本/接口调用。口令为空则视为"开放访问"（只适合本机）。
     """
     cfg_for_backtest = backtest_cfg if backtest_cfg is not None else _NullCfg()
+    index = Path(frontend_dist) / "index.html" if frontend_dist else None
     try:
         default_backtest_days = int(cfg_for_backtest.get("backtest.days", 90) or 90)
     except (TypeError, ValueError):  # pragma: no cover - 配置写坏了不该影响网页
@@ -1970,14 +1977,16 @@ def make_handler(
             raw = parse_qs(body)
             return {key: values[0] for key, values in raw.items() if values}
 
-        def _send(self, body: bytes, status: int = 200, ctype: str = "text/html; charset=utf-8"):
+        def _send(self, body: bytes, status: int = 200, ctype: str = "text/html; charset=utf-8", cache_control: str = "no-store", cookie=None):
             self.send_response(status)
             self.send_header("Content-Type", ctype)
             if len(body) > 1024 and "gzip" in self.headers.get("Accept-Encoding", ""):
                 body = gzip.compress(body, 6)  # 页面 25~50KB，压完通常 1/4 大小
                 self.send_header("Content-Encoding", "gzip")
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", cache_control)
+            if cookie is not None:
+                self._set_session(cookie[0], cookie[1])
             self.end_headers()
             self.wfile.write(body)
 
@@ -1988,12 +1997,30 @@ def make_handler(
             if path == "/healthz":
                 self._send(b"ok", ctype="text/plain; charset=utf-8")
                 return
+            if path == "/api/session":
+                body = {"authenticated": self._authed(), "title": title}
+                self._send(json.dumps(body, ensure_ascii=False).encode(), ctype="application/json; charset=utf-8")
+                return
+            if path.startswith("/ui/"):
+                from .ui import asset
+
+                resource = asset(frontend_dist, path)
+                if resource is None:
+                    self._send(b"Not Found", 404, "text/plain")
+                else:
+                    body, mime = resource
+                    cache = "public, max-age=31536000, immutable" if path.startswith("/ui/assets/") else "no-store"
+                    self._send(body, ctype=mime, cache_control=cache)
+                return
             if path == "/login":
                 if self._session_ok():
                     self._redirect("/")
                     return
-                body = render_login(title, next_path=_safe_next(params.get("next")))
-                self._send(body.encode("utf-8"))
+                if index and index.is_file():
+                    self._send(index.read_bytes())
+                else:
+                    body = render_login(title, next_path=_safe_next(params.get("next")))
+                    self._send(body.encode("utf-8"))
                 return
             if path == "/logout":
                 self._redirect("/login", cookie=("", 0))
@@ -2009,6 +2036,36 @@ def make_handler(
                 else:
                     target = quote(_safe_next(self.path), safe="/?&=%")
                     self._redirect(f"/login?next={target}")
+                return
+
+            is_page = path in ("/", "/index.html", "/summary", "/tiers", "/strategy-review") or path.startswith("/signals/")
+            if index and index.is_file() and is_page:
+                self._send(index.read_bytes())
+                return
+
+            if path == "/api/ui/meta":
+                with store_factory() as st:
+                    result = {"title": title, "latest_date": st.latest_signal_date(),
+                              "views": [{"key": key, "label": spec["nav"], "title": spec["title"],
+                                         "columns": list(VIEW_COLUMNS.get(key, BASE_COLUMNS)),
+                                         "help": plain_help((view_help or {}).get(key, ""))} for key, spec in VIEWS.items()],
+                              "update_note": format_update_note(update_times), "today": tz_today()}
+                self._send(json.dumps(result, ensure_ascii=False).encode(), ctype="application/json; charset=utf-8")
+                return
+
+            if path == "/api/summary":
+                from .ui import summary
+
+                day = params.get("date")
+                try:
+                    if day and dt.date.fromisoformat(day).isoformat() != day:
+                        raise ValueError()
+                except ValueError:
+                    self._send(b'{"error":"date must be YYYY-MM-DD"}', 400, "application/json")
+                    return
+                with store_factory() as st:
+                    result = summary(st, cfg_for_backtest, day)
+                self._send(json.dumps(result, ensure_ascii=False).encode(), ctype="application/json; charset=utf-8")
                 return
 
             if path == "/api/trade-ticks":
@@ -2310,6 +2367,34 @@ def make_handler(
         def do_POST(self) -> None:  # noqa: N802 - http.server 的命名约定
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/") or "/"
+            if path == "/api/session":
+                ctype = "application/json; charset=utf-8"
+                origin = self.headers.get("Origin")
+                if origin and urlparse(origin).netloc != self.headers.get("Host"):
+                    self.close_connection = True
+                    self._send(b'{"error":"origin mismatch"}', 403, ctype)
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    length = -1
+                if length < 0 or length > 8192:
+                    self.close_connection = True
+                    self._send(b'{"error":"invalid form length"}', 413, ctype)
+                    return
+                form = self._read_form()
+                ip = self.client_address[0] if self.client_address else "?"
+                if password and _login_failures(ip) >= LOGIN_MAX_FAILURES:
+                    self._send(json.dumps({"error": "失败次数过多，请稍后再试"}, ensure_ascii=False).encode(), 429, ctype)
+                elif not password or check_password(password, form.get("password", "")):
+                    _clear_login_failures(ip)
+                    days = session_days if form.get("remember", "").lower() in ("1", "true", "on", "yes") else 1
+                    body = {"ok": True, "next": _safe_next(form.get("next"))}
+                    self._send(json.dumps(body).encode(), ctype=ctype, cookie=(issue_session(password, days), days))
+                else:
+                    _record_login_failure(ip)
+                    self._send(json.dumps({"error": "口令不正确"}, ensure_ascii=False).encode(), 401, ctype)
+                return
             if path != "/login":
                 self._send(
                     "405 Method Not Allowed".encode("utf-8"), 405, "text/plain; charset=utf-8"
@@ -2360,6 +2445,7 @@ def serve(
     blocking: bool = True,
     auction_service=None,
     ticks_service=None,
+    frontend_dist=None,
 ) -> ThreadingHTTPServer:
     """起一个网页服务，返回 server 对象（``blocking=False`` 时自己开线程，方便测试）。"""
     handler = make_handler(
@@ -2377,6 +2463,7 @@ def serve(
         backtest_cfg=backtest_cfg,
         auction_service=auction_service,
         ticks_service=ticks_service,
+        frontend_dist=frontend_dist,
     )
     httpd = ThreadingHTTPServer((host, int(port)), handler)
     log.info(

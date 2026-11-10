@@ -1585,6 +1585,7 @@ def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
             summary_after_cfg=summary_after(cfg),
             auction_service=auction_service,
             ticks_service=ticks_service,
+            frontend_dist=cfg.root / "frontend" / "dist",
             backtest_cfg=cfg,  # 梯队回测页要用 backtest.*（入场价/持有期/默认天数）
         )
     except OSError as exc:
