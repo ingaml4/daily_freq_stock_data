@@ -8,6 +8,7 @@ from decimal import Decimal, ROUND_HALF_UP, localcontext
 
 from . import tzutil
 from .auction import (
+    ACTIVE,
     AuctionRequestError as TradeTicksRequestError,
     CurrentSnapshotService,
     SHANGHAI,
@@ -119,6 +120,7 @@ class TradeTicksService(CurrentSnapshotService):
     """按股票缓存原始片段，只在收到查询时采集；逐笔数组按源顺序展示。"""
 
     endpoint = ENDPOINT
+    query_phases = ACTIVE | {"lunch", "closed"}
 
     def __init__(self, fetch, *, clock=tzutil.now, ttl_seconds=20, cache_size=24, per_minute=60):
         super().__init__(

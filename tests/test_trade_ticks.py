@@ -138,3 +138,30 @@ def test_client_uses_measured_one_attempt_transport():
         assert endpoint(url, client.base_url) == "hsrl.zbjy"
     finally:
         client.close()
+
+
+@pytest.mark.parametrize(
+    "observed,last,phase",
+    [
+        ("12:00:00", "11:30:00", "lunch"),
+        ("15:30:00", "15:00:00", "closed"),
+    ],
+)
+def test_break_and_close_fetch_only_trade_fragments_on_demand(observed, last, phase):
+    from emscan.auction import AuctionBookService
+
+    now = [at(observed)]
+    fetch = Mock(return_value=[trade(last)])
+    service = TradeTicksService(fetch, clock=lambda: now[0])
+    books = AuctionBookService(fetch, clock=lambda: now[0])
+    assert fetch.call_count == 0
+    quote = books.snapshot(["301502"])
+    assert quote["upstream_requests"] == 0 and quote["items"][0]["reason"] == "market_closed"
+    for expected in (1, 0):
+        frame = service.snapshot(["301502"])
+        assert frame["phase"] == phase and frame["upstream_requests"] == expected
+        assert frame["items"][0]["quality"] == "gap" and frame["items"][0]["ticks"]
+        assert frame["items"][0]["coverage_gap"] and not frame["items"][0]["realtime_verified"]
+    now[0] += timedelta(seconds=21)
+    assert service.snapshot(["301502"])["upstream_requests"] == 1
+    assert fetch.call_count == 2

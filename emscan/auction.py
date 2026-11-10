@@ -151,6 +151,8 @@ def _iso(stamp):
 class CurrentSnapshotService:
     """单次行情快照的交易时段、每股缓存、并发合并及实例用量上限。"""
 
+    query_phases = ACTIVE
+
     def __init__(self, fetch, *, clock=tzutil.now, ttl_seconds=10, cache_size=512, per_minute=60):
         self.fetch = fetch
         self.clock = clock
@@ -221,7 +223,7 @@ class CurrentSnapshotService:
             received, payload, reason = now, None, unsupported
             requested = cached = False
             if not reason:
-                if phase in ACTIVE:
+                if phase in self.query_phases:
                     received, payload, reason, requested, cached = self._fetch(
                         (secid, now.date(), phase), now
                     )
