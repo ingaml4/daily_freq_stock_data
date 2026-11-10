@@ -4,7 +4,7 @@ import html
 
 
 LABELS = {
-    "baseline": "当前信号基线",
+    "baseline": "原四信号规则对照",
     "setups": "趋势突破＋止跌确认",
     "setups_sector": "加入行业与个股相对强弱排序",
     "setups_sector_exit": "加入结构失效与时间退出",
@@ -42,7 +42,7 @@ a{{color:#76baff}}table{{border-collapse:collapse;width:100%;white-space:nowrap}
 <h1>短期策略回测比较</h1><p><strong>{status}</strong></p>
 <p>数据截至 {esc(result['asof'])}。回放信号区间 {esc(coverage['start'])} 至 {esc(coverage['end'])}；
 样本外区间 {esc(coverage['test_start'])} 至 {esc(coverage['test_end'])}，共 {coverage['test_sessions']} 个市场信号日。</p>
-<p>四组使用相同手续费与滑点、下一交易日开盘入场、五个交易日主持有期。组合初始资金80万元，最多8只，每笔预算10万元；
+<p>原四信号对照由放量上攻、MACD/KDJ金叉、收破布林下轨的并集重建；既有AI榜单的真实发布结果另列于完整报告。四组使用相同手续费与滑点、下一交易日开盘入场、五个交易日主持有期。组合初始资金80万元，最多8只，每笔预算10万元；
 已持有或现金不足时跳过，剩余资金留现金。表内单笔统计只包含可核验的完成买卖，未成交及缺数详见明细。</p>
 <div class="wrap"><table><thead><tr><th>方案</th><th>入选次数</th><th>完成买卖</th><th>有完成样本的信号日</th>
 <th>单笔平均净收益</th><th>样本外资金收益</th><th>组合最大回撤</th><th>验收</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>

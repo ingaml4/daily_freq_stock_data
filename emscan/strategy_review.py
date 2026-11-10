@@ -210,6 +210,25 @@ def _select(frame, name):
     return rows.groupby("date", sort=False).head(POLICY["max_candidates_per_day"])
 
 
+def _published_reference(store, cfg):
+    from .backtest import evaluate
+
+    picks = store.load_tier_picks()
+    if picks.empty:
+        return {"closed": 0, "role": "published_list_reference_only"}
+    picks = picks[picks["created_at"].astype(str).str[:10].eq(picks["date"].astype(str))]
+    picks = picks[~picks["secid"].str.startswith(("1.688", "1.689"))]
+    result = evaluate(store, cfg, picks)
+    orders = []
+    for row in result["rows"]:
+        item = row["execution"]
+        outcome = item["exits"].get(5, item)
+        orders.append({**outcome, "date": row["date"], "cost": outcome.get("total_cost"),
+                       "eligible_for_validation": outcome["status"] == "closed"})
+    return {**_statistics(orders), "role": "published_list_reference_only",
+            "comparison_warning": "different_dates_and_ai_selection_not_paired_to_reconstructed_rules"}
+
+
 def run(store, cfg):
     from .strategy_rules import strategy_candidates
     from .strategy_execution import simulate_candidate
@@ -288,7 +307,7 @@ def run(store, cfg):
               "arms": summary, "out_of_sample_differences": spread, "portfolio_differences": portfolio_spread,
               "approved_strategies": [name for name in ARMS if name != "baseline" and summary[name]["promotion"]["approved"]],
               "conclusion": "insufficient_evidence", "live_selection_changed": False,
-              "execution_parameters": opts,
+              "execution_parameters": opts, "published_ai_reference": _published_reference(store, cfg),
               "comparison_unit": "independent_order_statistics_and_separate_800000_cny_shared_cash_portfolios",
               "limitations": ["current_surviving_universe", "current_industry_tags", "historical_price_basis_mixed",
                               "unavailable_executions_are_censored_not_zero_returns", "overlapping_5day_holds", "short_out_of_sample"]}
