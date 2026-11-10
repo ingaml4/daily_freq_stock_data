@@ -1395,8 +1395,10 @@ def render_html(
 """
 
 
-def render_json(ctx: PageContext) -> str:
-    return json.dumps(ctx.as_dict(), ensure_ascii=False, indent=2)
+def render_json(ctx: PageContext, help_text: str = "") -> str:
+    result = ctx.as_dict()
+    result["help"] = plain_help(help_text)
+    return json.dumps(result, ensure_ascii=False, indent=2)
 
 
 # --------------------------------------------------------------- 梯队回测页面
@@ -2368,7 +2370,7 @@ def make_handler(
 
             if is_api:
                 self._send(
-                    render_json(ctx).encode("utf-8"), ctype="application/json; charset=utf-8"
+                    render_json(ctx, (view_help or {}).get(normalize_view(view), "")).encode("utf-8"), ctype="application/json; charset=utf-8"
                 )
             else:
                 self._send(
