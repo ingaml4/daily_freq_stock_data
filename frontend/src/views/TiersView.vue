@@ -4,12 +4,12 @@ import { useRoute, useRouter } from "vue-router";
 import {
   NAlert,
   NButton,
+  NButtonGroup,
   NDataTable,
   NSelect,
-  NTabPane,
-  NTabs,
   NTag,
   type DataTableColumns,
+  type DataTableSortState,
 } from "naive-ui";
 import { getJson } from "../api";
 import PageState from "../components/PageState.vue";
@@ -18,6 +18,7 @@ import {
   localTime,
   message,
   number,
+  numeric,
   percent,
   stockLink,
 } from "../components/presentation";
@@ -204,26 +205,78 @@ function details(row: TierRow) {
       : h("span", { class: "data-note" }, "手工记录"),
   ]);
 }
-const commonColumns: DataTableColumns<TierRow> = [
+const sorting = ref<{ columnKey: string; order: "ascend" | "descend" | false }>(
+  { columnKey: "date", order: "descend" },
+);
+function updateSorting(
+  value: DataTableSortState | DataTableSortState[] | null,
+) {
+  const state = Array.isArray(value) ? value[0] : value;
+  sorting.value = {
+    columnKey: String(state?.columnKey || ""),
+    order: state?.order || false,
+  };
+}
+function sortable(
+  key: string,
+  read: (row: TierRow) => string | number | null | undefined,
+) {
+  return {
+    sorter: (a: TierRow, b: TierRow) => {
+      const left = read(a);
+      const right = read(b);
+      const emptyLeft = left === null || left === undefined || left === "";
+      const emptyRight = right === null || right === undefined || right === "";
+      if (emptyLeft && emptyRight) return 0;
+      // Naive UI 会反转降序比较结果，缺失项在两个方向均放到末尾。
+      const missing = sorting.value.order === "descend" ? -1 : 1;
+      if (emptyLeft) return missing;
+      if (emptyRight) return -missing;
+      if (typeof left === "number" && typeof right === "number")
+        return left - right;
+      return String(left).localeCompare(String(right), "zh-CN");
+    },
+    sortOrder:
+      sorting.value.columnKey === key ? sorting.value.order : (false as const),
+  };
+}
+const commonColumns = computed<DataTableColumns<TierRow>>(() => [
   { type: "expand", width: 38, renderExpand: details },
   {
     title: "名单日",
     key: "date",
     width: 116,
-    sorter: (a, b) => a.date.localeCompare(b.date),
-    defaultSortOrder: "descend",
+    ...sortable("date", (row) => row.date),
   },
-  { title: "梯队", key: "tier_label", width: 104 },
-  { title: "股票", key: "stock", width: 160, render: stockLink },
-  { title: "行业", key: "industry", width: 128, ellipsis: { tooltip: true } },
-];
+  {
+    title: "梯队",
+    key: "tier_label",
+    width: 104,
+    ...sortable("tier_label", (row) => row.tier),
+  },
+  {
+    title: "股票",
+    key: "stock",
+    width: 160,
+    render: stockLink,
+    ...sortable("stock", (row) => row.name),
+  },
+  {
+    title: "行业",
+    key: "industry",
+    width: 128,
+    ellipsis: { tooltip: true },
+    ...sortable("industry", (row) => row.industry),
+  },
+]);
 const columns = computed<DataTableColumns<TierRow>>(() =>
   mode.value === "execution"
     ? [
-        ...commonColumns,
+        ...commonColumns.value,
         {
           title: "模拟买入",
           key: "buy",
+          ...sortable("buy", (row) => numeric(row.execution?.buy?.price)),
           width: 132,
           align: "right",
           render: (row) =>
@@ -239,6 +292,7 @@ const columns = computed<DataTableColumns<TierRow>>(() =>
         {
           title: "模拟卖出",
           key: "sell",
+          ...sortable("sell", (row) => numeric(result(row).sell?.price)),
           width: 132,
           align: "right",
           render: (row) =>
@@ -250,6 +304,7 @@ const columns = computed<DataTableColumns<TierRow>>(() =>
         {
           title: `${horizon.value} 日净收益`,
           key: "net_return",
+          ...sortable("net_return", (row) => numeric(result(row).net_return)),
           width: 130,
           align: "right",
           render: (row) => change(result(row).net_return),
@@ -257,6 +312,7 @@ const columns = computed<DataTableColumns<TierRow>>(() =>
         {
           title: "合计成本 / 元",
           key: "cost",
+          ...sortable("cost", (row) => numeric(result(row).total_cost)),
           width: 130,
           align: "right",
           render: (row) => number(result(row).total_cost),
@@ -264,6 +320,7 @@ const columns = computed<DataTableColumns<TierRow>>(() =>
         {
           title: "状态",
           key: "state",
+          ...sortable("state", (row) => result(row).status),
           width: 145,
           render: (row) => {
             const outcome = result(row);
@@ -286,10 +343,11 @@ const columns = computed<DataTableColumns<TierRow>>(() =>
         },
       ]
     : [
-        ...commonColumns,
+        ...commonColumns.value,
         {
           title: "参考入场价",
           key: "entry",
+          ...sortable("entry", (row) => numeric(row.entry)),
           width: 120,
           align: "right",
           render: (row) => number(row.entry),
@@ -297,6 +355,9 @@ const columns = computed<DataTableColumns<TierRow>>(() =>
         {
           title: `${horizon.value} 日价格变动`,
           key: "observation",
+          ...sortable("observation", (row) =>
+            numeric(row.rets[String(horizon.value)]),
+          ),
           width: 145,
           align: "right",
           render: (row) => change(row.rets[String(horizon.value)]),
@@ -304,6 +365,9 @@ const columns = computed<DataTableColumns<TierRow>>(() =>
         {
           title: "同期指数超额",
           key: "excess",
+          ...sortable("excess", (row) =>
+            numeric(row.excess[String(horizon.value)]),
+          ),
           width: 135,
           align: "right",
           render: (row) => change(row.excess[String(horizon.value)]),
@@ -311,6 +375,7 @@ const columns = computed<DataTableColumns<TierRow>>(() =>
         {
           title: "最高价相对入场",
           key: "max_gain",
+          ...sortable("max_gain", (row) => numeric(row.max_gain)),
           width: 145,
           align: "right",
           render: (row) => change(row.max_gain),
@@ -318,6 +383,7 @@ const columns = computed<DataTableColumns<TierRow>>(() =>
         {
           title: "最低价相对入场",
           key: "max_drawdown",
+          ...sortable("max_drawdown", (row) => numeric(row.max_drawdown)),
           width: 145,
           align: "right",
           render: (row) => change(row.max_drawdown),
@@ -325,6 +391,7 @@ const columns = computed<DataTableColumns<TierRow>>(() =>
         {
           title: "记录状态",
           key: "status",
+          ...sortable("status", (row) => row.status),
           width: 130,
           render: (row) =>
             h(
@@ -367,6 +434,9 @@ function changeDays(value: number) {
   router.replace({ path: "/tiers", query: { days: String(value) } });
 }
 watch(days, load, { immediate: true });
+watch(mode, () => {
+  sorting.value = { columnKey: "date", order: "descend" };
+});
 onBeforeUnmount(() => controller?.abort());
 </script>
 
@@ -428,11 +498,24 @@ onBeforeUnmount(() => controller?.abort());
     >
     <section class="panel section">
       <div class="tier-toolbar">
-        <n-tabs v-model:value="mode" type="line" size="small"
-          ><n-tab-pane name="execution" tab="T+1 模拟净收益" /><n-tab-pane
-            name="observation"
-            tab="价格观察"
-        /></n-tabs>
+        <n-button-group
+          role="group"
+          aria-label="收益口径"
+          class="tier-mode-switch"
+        >
+          <n-button
+            :type="mode === 'execution' ? 'primary' : 'default'"
+            :aria-pressed="mode === 'execution'"
+            @click="mode = 'execution'"
+            >T+1 模拟净收益</n-button
+          >
+          <n-button
+            :type="mode === 'observation' ? 'primary' : 'default'"
+            :aria-pressed="mode === 'observation'"
+            @click="mode = 'observation'"
+            >价格观察</n-button
+          >
+        </n-button-group>
         <div class="tier-filters">
           <n-select
             v-model:value="tier"
@@ -509,6 +592,7 @@ onBeforeUnmount(() => controller?.abort());
         :row-key="(row) => `${row.date}-${row.tier}-${row.secid}`"
         :scroll-x="mode === 'execution' ? 1350 : 1450"
         :pagination="pagination"
+        @update:sorter="updateSorting"
         :bordered="false"
         size="small"
       />
@@ -518,15 +602,11 @@ onBeforeUnmount(() => controller?.abort());
       class="data-note section"
     >
       按日线开盘与收盘模拟，每笔预算
-      {{
-        number(data.execution.parameters.capital / 10000, 0)
-      }}
+      {{ number(data.execution.parameters.capital / 10000, 0) }}
       万元。最早买入后的下一交易日卖出。双边佣金
       {{ data.execution.parameters.commission_bps }} bp，最低
       {{ data.execution.parameters.min_commission }} 元；滑点每边
-      {{
-        data.execution.parameters.slippage_bps
-      }}
+      {{ data.execution.parameters.slippage_bps }}
       bp。停牌、涨跌停及价格基础缺口保留状态。
     </p>
     <p v-else class="data-note section">
@@ -554,13 +634,13 @@ onBeforeUnmount(() => controller?.abort());
   color: var(--color-text);
 }
 .tier-toolbar {
-  padding: 9px 22px 0;
+  padding: 18px 22px 0;
   display: flex;
   gap: 20px;
   align-items: center;
   justify-content: space-between;
 }
-.tier-toolbar > .n-tabs {
+.tier-mode-switch {
   width: auto;
   min-width: 280px;
 }
@@ -678,7 +758,7 @@ onBeforeUnmount(() => controller?.abort());
   .tier-meta {
     gap: 10px;
   }
-  .tier-toolbar > .n-tabs {
+  .tier-mode-switch {
     min-width: 100%;
     width: 100%;
   }
