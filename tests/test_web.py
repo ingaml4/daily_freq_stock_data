@@ -499,7 +499,7 @@ def test_each_view_has_its_own_columns(tmp_path):
     kdj = render_html(build_context(store, view="kdj_golden"))
     assert "K" in kdj and "DIFF" not in kdj
     box = render_html(build_context(store, view="box_range"))
-    assert "箱体位置" in box and "DIFF" not in box
+    assert "放量突破箱体上沿" in box and "DIFF" not in box
     rev = render_html(build_context(store, view="reversal"))
     assert "反转分" in rev and "证据" in rev and "DIFF" not in rev
     # 有数据的视图都带基础信息（box/reversal 在样本里没命中 → 没有表头）
