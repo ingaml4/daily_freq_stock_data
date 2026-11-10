@@ -20,6 +20,7 @@ _ROUTES = {
     ("hsrl", "ssjy_more"): "hsrl.ssjy_more",
     ("hsrl", "ssjy"): "hsrl.ssjy",
     ("hsstock", "history"): "hsstock.history.kline",
+    ("hsstock", "real", "five"): "hsstock.real.five",
     ("hsstock", "latest"): "hsstock.latest",
     ("hsstock", "instrument"): "hsstock.instrument",
     ("tcalendar", "list"): "tcalendar.list",

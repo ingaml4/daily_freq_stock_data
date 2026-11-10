@@ -33,6 +33,7 @@ import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 from typing import (
     Any,
     Callable,
@@ -169,12 +170,17 @@ class MairuiError(RuntimeError):
     """接口请求失败（重试后仍未成功），或证书无效/未配置。"""
 
 
+class MairuiNotConfiguredError(MairuiError):
+    upstream_requested = False
+
+
 class MairuiQuotaError(MairuiError):
     """接口限额、访问权限或凭证阻止请求，不应退化为逐股调用。"""
 
-    def __init__(self, message, scope="endpoint"):
+    def __init__(self, message, scope="endpoint", *, upstream_requested=True):
         super().__init__(message)
         self.scope = scope
+        self.upstream_requested = upstream_requested
 
 
 # https://www.mairui.club/faq，业务码来自响应正文，独立于 HTTP 状态。
@@ -862,7 +868,7 @@ class MairuiClient:
     # ------------------------------------------------------------------ 底层
     def _require_licence(self) -> str:
         if not self.licence:
-            raise MairuiError(
+            raise MairuiNotConfiguredError(
                 "未配置麦蕊智数证书（licence）：请在 config.yaml 里填写 mairui.licence，"
                 "或设置环境变量 MAIRUI_LICENCE。证书可在 https://www.mairui.club 领取。"
             )
@@ -873,18 +879,24 @@ class MairuiClient:
 
     def _check_block(self, route):
         with self._block_lock:
+            stamp = time.monotonic()
+            for name in ("*", route):
+                if name in self._blocked_routes and self._blocked_routes[name][0] <= stamp:
+                    del self._blocked_routes[name]
             credential = self._blocked_routes.get("*")
             endpoint = self._blocked_routes.get(route)
             ip_window_active = self._ip_retry_at > time.monotonic()
         if credential or endpoint:
             request_usage.count(route, "circuit_skips")
             raise MairuiQuotaError(
-                credential or endpoint, "credential" if credential else "endpoint"
+                (credential or endpoint)[1],
+                "credential" if credential else "endpoint",
+                upstream_requested=False,
             )
 
         if ip_window_active:
             request_usage.count(route, "circuit_skips")
-            raise MairuiQuotaError(_IP_LIMIT, "ip_window")
+            raise MairuiQuotaError(_IP_LIMIT, "ip_window", upstream_requested=False)
 
     def _start_ip_window(self):
         # 同时在途的其他请求收到 103 时沿用已有窗口，仅首个请求可以等待并重试。
@@ -895,27 +907,34 @@ class MairuiClient:
             self._ip_retry_at = now + _IP_WINDOW_SECONDS
             return True
 
-    def _block(self, route, scope, message):
+    def _block(self, route, scope, message, ttl=None):
         with self._block_lock:
-            self._blocked_routes["*" if scope == "credential" else route] = message
+            expiry = time.monotonic() + ttl if ttl is not None else float("inf")
+            self._blocked_routes["*" if scope == "credential" else route] = (expiry, message)
         raise MairuiQuotaError(message, scope)
 
-    def _get_json(self, url: str, params: Optional[Dict[str, Any]] = None) -> Any:
+    def _get_json(
+        self, url: str, params: Optional[Dict[str, Any]] = None, *, one_attempt: bool = False
+    ) -> Any:
         """GET 一个 JSON 接口；失败按指数退避重试。"""
         route = request_usage.endpoint(url, self.base_url)
         request_usage.count(route, "logical_calls")
         retried_ip_window = False
-        for attempt in range(self.retries + 1):
+        retries = 0 if one_attempt else self.retries
+        for attempt in range(retries + 1):
             self._check_block(route)
-            self.limiter.acquire()
-            self._check_block(route)
+            if not one_attempt:
+                self.limiter.acquire()
+                self._check_block(route)
             status, code, problem = None, None, None
             try:
                 with request_usage.call(route, retry=attempt > 0):
                     # 调用方注入的 Session 可自定义传输层，无法证明其内部 HTTP 次数，单列。
                     if not self._metered_session:
                         request_usage.count(route, "external_gets")
-                    resp = self.session.get(url, params=params, timeout=self.timeout)
+                    options = {"allow_redirects": False} if one_attempt else {}
+                    timeout = min(2.5, self.timeout) if one_attempt else self.timeout
+                    resp = self.session.get(url, params=params, timeout=timeout, **options)
             except Exception as exc:
                 # requests 的异常通常含完整 URL，不能把证书复制进日志或异常链。
                 last_error = type(exc).__name__
@@ -932,14 +951,22 @@ class MairuiClient:
                 if code:
                     last_error += f" / 接口错误码 {code}"
                 if code in _CREDENTIAL_CODES:
+                    ttl = None
+                    if one_attempt:
+                        shanghai = datetime.now(timezone(timedelta(hours=8)))
+                        midnight = (shanghai + timedelta(days=1)).replace(
+                            hour=0, minute=0, second=0, microsecond=0
+                        )
+                        ttl = (midnight - shanghai).total_seconds() if code == "101" else 300
                     self._block(
                         route,
                         "credential",
                         f"{route} 失败：{last_error}，{_CREDENTIAL_CODES[code]}",
+                        ttl=ttl,
                     )
                 if code == "103":
                     leader = self._start_ip_window()
-                    if leader and not retried_ip_window and attempt < self.retries:
+                    if leader and not retried_ip_window and attempt < retries:
                         retried_ip_window = True
                         time.sleep(_IP_WINDOW_SECONDS)
                         continue
@@ -951,22 +978,29 @@ class MairuiClient:
                     problem = text
                 if status == 200 and payload is not None and not problem and not code:
                     request_usage.count(route, "json_successes")
-                    if self.sleep:
+                    if self.sleep and not one_attempt:
                         time.sleep(self.sleep * random.random())
                     return payload
                 if payload is None:
                     last_error += "（响应不是 JSON）"
             scope = _quota_scope(status, problem)
             if scope:
-                self._block(route, scope, f"{route} 失败：{last_error}")
+                self._block(
+                    route, scope, f"{route} 失败：{last_error}", ttl=300 if one_attempt else None
+                )
             if status in (400, 404, 405, 410, 422):
                 raise MairuiError(f"{route} 失败：{last_error}")
-            if attempt < self.retries:
+            if attempt < retries:
                 backoff = min(0.5 * (2**attempt), 5.0) + random.random() * 0.2
                 log.debug("%s 请求失败（%s），%.1fs 后重试", route, last_error, backoff)
                 time.sleep(backoff)
         if status == 429 or code == "429":
-            self._block(route, "endpoint", f"{route} 持续限流：{last_error}")
+            self._block(
+                route,
+                "endpoint",
+                f"{route} 持续限流：{last_error}",
+                ttl=60 if one_attempt else None,
+            )
         raise MairuiError(f"{route} 失败：{last_error}")
 
     # ------------------------------------------------------------- 股票列表
@@ -1002,6 +1036,20 @@ class MairuiClient:
         return sorted(set(days))
 
     # --------------------------------------------------------- 实时行情快照
+    def fetch_order_book(self, secid: str) -> Any:
+        """当前五档原始回包；一次 GET，不跟随重定向，不重试。"""
+        market, sep, code = secid.partition(".")
+        if (
+            market not in ("0", "1")
+            or not sep
+            or len(code) != 6
+            or not code.isascii()
+            or not code.isdigit()
+        ):
+            raise ValueError("非法股票代码")
+        url = self._url(f"/hsstock/real/five/{code}/{self._require_licence()}")
+        return self._get_json(url, one_attempt=True)
+
     def fetch_quote_all(self) -> List[Dict[str, Any]]:
         """全市场实时行情（``hsrl/real/all``，一次请求拿到所有股票）。"""
         licence = self._require_licence()
