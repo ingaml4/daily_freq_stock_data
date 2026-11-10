@@ -106,6 +106,8 @@ const viewFields: Record<string, string[]> = {
   ],
 };
 const fieldNames: Record<string, string> = {
+  code: "代码",
+  name: "名称",
   industry: "行业",
   board: "板块",
   close: "收盘价",
@@ -114,6 +116,8 @@ const fieldNames: Record<string, string> = {
   turnover: "换手率",
   vol_ratio_5: "5 日量比",
   vol_ratio_20: "20 日量比",
+  valid_bars: "量能样本数",
+  reversal_bars: "反转样本数",
   vol_z60: "Z60",
   vol_signal: "量能形态",
   macd_diff: "DIFF",
@@ -130,17 +134,52 @@ const fieldNames: Record<string, string> = {
   doji_vol_ratio: "量 / 前 5 日均",
   doji_drawdown: "距高点回撤",
   doji_stop_pos: "收盘位置",
+  doji_pos: "60 日区间位置",
+  doji_body: "实体比例",
+  doji_lower: "下影比例",
+  doji_upper: "上影比例",
   rev_signals: "反转依据",
   box_high: "箱体上沿",
   box_low: "箱体下沿",
   box_breakout_pct: "突破幅度",
   box_width: "箱体宽度",
+  box_pos: "相对原箱体位置",
+  box_avg_turnover: "日均换手率",
+  box_avg_amplitude: "日均振幅",
   ma5: "MA5",
   ma10: "MA10",
   ma20: "MA20",
   ma60: "MA60",
   signals_cn: "命中信号",
 };
+const fieldPrecision: Record<string, number> = {
+  valid_bars: 0,
+  reversal_bars: 0,
+  rev_score: 0,
+  vol_z60: 1,
+  kdj_k: 1,
+  kdj_d: 1,
+  kdj_j: 1,
+  ma5: 3,
+  ma10: 3,
+  ma20: 3,
+  ma60: 3,
+  macd_diff: 3,
+  macd_dea: 3,
+  macd_bar: 3,
+};
+const staleMessage = computed(() => {
+  const date = data.value?.date;
+  if (!date) return "尚无有效收盘数据，盘后更新完成后可在这里查看。";
+  const times = [
+    ...new Set(data.value?.update_note.match(/\b\d{2}:\d{2}\b/g) || []),
+  ];
+  const schedule = times.length
+    ? `交易日计划于北京时间 ${times.join("、")} 更新。`
+    : "数据在交易日盘后更新。";
+  return `当前展示 ${date} 的最新收盘数据。${schedule}休市期间显示最近交易日的数据。`;
+});
+
 const defaultFields = computed(() => {
   const columns = data.value?.columns;
   if (columns?.length)
@@ -239,10 +278,12 @@ const tableColumns = computed<DataTableColumns<Row>>(() => [
       defaultSort.value.columnKey === key ? defaultSort.value.order : false,
     render: (row: Row) => {
       if (key === "pct_chg") return change(row[key], false);
-      if (["doji_drawdown", "box_breakout_pct"].includes(key))
-        return change(row[key]);
-      if (key === "box_width") return percent(row[key]);
-      if (key === "turnover")
+      if (key === "doji_drawdown") return change(row[key], true, 1);
+      if (key === "box_breakout_pct") return change(row[key]);
+      if (["doji_body", "doji_lower", "doji_upper"].includes(key))
+        return percent(row[key]);
+      if (key === "box_width") return percent(row[key], true, 1);
+      if (["turnover", "box_avg_turnover", "box_avg_amplitude"].includes(key))
         return `${number(row[key])}${numeric(row[key]) === null ? "" : "%"}`;
       if (
         [
@@ -257,12 +298,7 @@ const tableColumns = computed<DataTableColumns<Row>>(() => [
       return h(
         "span",
         { class: "tabular" },
-        number(
-          row[key],
-          key.startsWith("ma") || key === "macd_diff" || key === "macd_dea"
-            ? 3
-            : 2,
-        ),
+        number(row[key], fieldPrecision[key] ?? 2),
       );
     },
   })),
@@ -340,7 +376,7 @@ onBeforeUnmount(() => controller?.abort());
     type="warning"
     :show-icon="false"
     class="section"
-    >{{ data.stale_reason || `最近数据为 ${data.date}` }}</n-alert
+    >{{ staleMessage }}</n-alert
   >
   <section class="panel">
     <div class="signal-toolbar">
@@ -422,11 +458,16 @@ onBeforeUnmount(() => controller?.abort());
 
 <style scoped>
 .signal-tabs {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   display: flex;
   gap: 6px;
   overflow-x: auto;
   margin: 24px 0 18px;
   padding-bottom: 3px;
+}
+.signal-tabs::-webkit-scrollbar {
+  display: none;
 }
 .signal-tabs a {
   color: var(--color-text-muted, #8c9bad);
