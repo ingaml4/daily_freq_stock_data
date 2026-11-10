@@ -1561,11 +1561,13 @@ def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
         return open_store(cfg)
 
     from .auction import AuctionBookService
+    from .trade_ticks import TradeTicksService
 
     book_client = MairuiClient.from_config(cfg) if password and cfg.get("mairui.licence") else None
     auction_service = (
         AuctionBookService(fetch=book_client.fetch_order_book) if book_client else None
     )
+    ticks_service = TradeTicksService(fetch=book_client.fetch_trade_ticks) if book_client else None
     try:
         serve(
             factory,
@@ -1582,6 +1584,7 @@ def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
             view_help=build_view_help(cfg),
             summary_after_cfg=summary_after(cfg),
             auction_service=auction_service,
+            ticks_service=ticks_service,
             backtest_cfg=cfg,  # 梯队回测页要用 backtest.*（入场价/持有期/默认天数）
         )
     except OSError as exc:

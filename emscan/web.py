@@ -1863,6 +1863,7 @@ def make_handler(
     summary_after_cfg: str = "17:00",
     backtest_cfg: Any = None,
     auction_service=None,
+    ticks_service=None,
 ) -> type:
     """生成一个 ``BaseHTTPRequestHandler`` 子类。
 
@@ -2008,6 +2009,30 @@ def make_handler(
                 else:
                     target = quote(_safe_next(self.path), safe="/?&=%")
                     self._redirect(f"/login?next={target}")
+                return
+
+            if path == "/api/trade-ticks":
+                from .trade_ticks import TradeTicksRequestError
+                from .auction_archive import current_session
+
+                status = 200
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                if not password or ticks_service is None:
+                    status, result = 503, {"error": "trade_ticks_service_unavailable"}
+                elif set(query) != {"symbols"} or len(query["symbols"]) != 1:
+                    status, result = 400, {"error": "expected symbols only"}
+                else:
+                    try:
+                        with store_factory() as st:
+                            session = current_session(st, tz_today())
+                        result = ticks_service.snapshot(query["symbols"][0].split(","), is_trading_day=session)
+                    except TradeTicksRequestError as exc:
+                        status, result = 400, {"error": str(exc)}
+                    except Exception:
+                        log.error("逐笔片段读取失败")
+                        status, result = 503, {"error": "trade_ticks_unavailable"}
+                self._send(json.dumps(result, ensure_ascii=False).encode("utf-8"), status,
+                           "application/json; charset=utf-8")
                 return
 
             if path == "/api/auction-snapshot":
@@ -2334,6 +2359,7 @@ def serve(
     backtest_cfg: Any = None,
     blocking: bool = True,
     auction_service=None,
+    ticks_service=None,
 ) -> ThreadingHTTPServer:
     """起一个网页服务，返回 server 对象（``blocking=False`` 时自己开线程，方便测试）。"""
     handler = make_handler(
@@ -2350,6 +2376,7 @@ def serve(
         summary_after_cfg=summary_after_cfg,
         backtest_cfg=backtest_cfg,
         auction_service=auction_service,
+        ticks_service=ticks_service,
     )
     httpd = ThreadingHTTPServer((host, int(port)), handler)
     log.info(
