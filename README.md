@@ -49,6 +49,7 @@ DeepSeek 返回 HTTP 402 时保存欠费事件，本机收盘自动化运行 `py
 
 通过站点原有登录或 HTTP Basic 请求 `GET /api/auction-snapshot?symbols=SZ301502,SZ300969`。每次最多 10 只沪深 A 股。接口按需查询，返回有序的 `items` 列表；688 科创板返回排除原因。每只股票的五档最多复用 10 秒，同股并发请求共享一次取数。
 
+- `schema_version` 为接口版本，`requested_at` 和 `as_of` 为此次请求的开始和结束时间。`upstream_requests` 记录此次实际发起的上游尝试，`cache_hits` 记录复用的帧数；账户扣次以供应商账单为准。
 - `raw.pb/ps` 是买卖价格，`raw.vb/vs` 是相应的挂单手数，索引 0 对应一档。沪深 A 股每手 100 股。`source_time` 是行情源时刻，`received_at` 是服务器接收时刻，均含北京时间偏移。
 - 盘中读取五档先看 `book_quality`、`reason` 和源时间。上游时间超过 60 秒、交易日期或阶段不符时会标出缺口。沪深正常交易日覆盖开盘及收盘集合竞价和连续竞价；午休、闭市不取数。
 - `quality` 对应集合竞价虚拟匹配证据。当前五档供应商尚未证实竞价期间的匹配字段映射，`matched_volume`、`unmatched_volume` 和方向留空。盘后接口 `hsstock/lup/auction` 的 `ov/cv` 分别是开盘和收盘的最终成交手数，实时端点不调用它。
