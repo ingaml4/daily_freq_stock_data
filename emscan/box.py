@@ -23,7 +23,18 @@ BOX_RULE_VERSION = "volume_breakout_v1"
 EPS = 1e-9
 
 # 参与计算的行情列（按列裁剪，省内存）
-BOX_BAR_COLUMNS = ("close", "high", "low", "turnover", "amount", "amplitude", "pct_chg", "volume", "float_mv", "volume_ratio")
+BOX_BAR_COLUMNS = (
+    "close",
+    "high",
+    "low",
+    "turnover",
+    "amount",
+    "amplitude",
+    "pct_chg",
+    "volume",
+    "float_mv",
+    "volume_ratio",
+)
 
 # 写进每日缓存的列
 BOX_COLUMNS: tuple = (
@@ -81,11 +92,21 @@ def compute_box_features(
     frame["date"] = frame["date"].astype(str)
     day = str(trade_date or frame["date"].max())
     frame = frame[frame["date"] <= day]
-    calendar = sorted({str(d) for d in (market_days if market_days is not None else frame["date"]) if str(d) <= day})
+    calendar = sorted(
+        {
+            str(d)
+            for d in (market_days if market_days is not None else frame["date"])
+            if str(d) <= day
+        }
+    )
     preceding = [d for d in calendar if d < day][-win:]
     previous_day = preceding[-1] if preceding else None
     for column in BOX_BAR_COLUMNS:
-        frame[column] = pd.to_numeric(frame.get(column), errors="coerce").replace([np.inf, -np.inf], np.nan) if column in frame else np.nan
+        frame[column] = (
+            pd.to_numeric(frame.get(column), errors="coerce").replace([np.inf, -np.inf], np.nan)
+            if column in frame
+            else np.nan
+        )
     active = frame[(frame["volume"] > 0) & (frame["close"] > 0)].sort_values(["secid", "date"])
     if active.empty or not (active["date"] == day).any():
         return pd.DataFrame(columns=columns)
@@ -98,8 +119,12 @@ def compute_box_features(
         today = group[group["date"] == day]
         history = group[group["date"].isin(preceding)]
         row = dict.fromkeys(BOX_COLUMNS)
-        row.update(secid=str(secid), box_rule_version=BOX_RULE_VERSION,
-                   box_days=len(history), s_box_range=0)
+        row.update(
+            secid=str(secid),
+            box_rule_version=BOX_RULE_VERSION,
+            box_days=len(history),
+            s_box_range=0,
+        )
         volume = volume_by_sid.get(secid, {})
         for key in ("vol_ratio_5", "vol_ratio_20", "vol_z60"):
             row[key] = volume.get(key)
@@ -129,21 +154,39 @@ def compute_box_features(
         # 创业板按20%制度的极端日阈值，主板按10%制度，保留原配置可调幅度。
         extreme_threshold = 19.5 if str(secid).startswith(("0.300", "0.301")) else 9.5
         extremes = int(np.count_nonzero(np.abs(pct) >= extreme_threshold))
-        row.update(box_high=high, box_low=low, box_width=width,
-                   box_pos=(last-low)/(high-low) if high > low else None,
-                   box_breakout_pct=last/high-1, box_net_chg=net, box_ma_gap=ma_gap,
-                   box_avg_turnover=avg_turnover, box_turnover_cv=cv,
-                   box_avg_amplitude=avg_amp, box_extreme_days=extremes)
+        row.update(
+            box_high=high,
+            box_low=low,
+            box_width=width,
+            box_pos=(last - low) / (high - low) if high > low else None,
+            box_breakout_pct=last / high - 1,
+            box_net_chg=net,
+            box_ma_gap=ma_gap,
+            box_avg_turnover=avg_turnover,
+            box_turnover_cv=cv,
+            box_avg_amplitude=avg_amp,
+            box_extreme_days=extremes,
+        )
         amount = _f(today["amount"].iloc[-1])
         row["s_box_range"] = int(
             _between(width, float(conf("box.min_width", 0.06)), float(conf("box.max_width", 0.35)))
             and abs(net) <= abs(float(conf("box.max_net_chg", 0.12))) + EPS
             and ma_gap <= abs(float(conf("box.max_ma_gap", 0.04))) + EPS
-            and _between(avg_turnover, float(conf("box.min_avg_turnover", 1)), float(conf("box.max_avg_turnover", 15)))
-            and cv is not None and cv <= float(conf("box.max_turnover_cv", 1)) + EPS
-            and _between(avg_amp, float(conf("box.min_avg_amplitude", 2)), float(conf("box.max_avg_amplitude", 9)))
+            and _between(
+                avg_turnover,
+                float(conf("box.min_avg_turnover", 1)),
+                float(conf("box.max_avg_turnover", 15)),
+            )
+            and cv is not None
+            and cv <= float(conf("box.max_turnover_cv", 1)) + EPS
+            and _between(
+                avg_amp,
+                float(conf("box.min_avg_amplitude", 2)),
+                float(conf("box.max_avg_amplitude", 9)),
+            )
             and extremes <= int(conf("box.max_extreme_days", 2))
-            and amount is not None and amount >= float(conf("box.min_amount", 30000000))
+            and amount is not None
+            and amount >= float(conf("box.min_amount", 30000000))
             and last > high + EPS * max(1.0, high)
             and volume.get("s_vol_spike") == 1
             and not (bool(conf("universe.exclude_st", True)) and str(secid) in excluded)
@@ -169,8 +212,14 @@ def box_features(
     st_secids: List[str] = []
     if symbols is not None and not symbols.empty and "is_st" in symbols.columns:
         st_secids = [str(s) for s in symbols.loc[symbols["is_st"] == 1, "secid"].tolist()]
-    features = compute_box_features(bars, st_secids=st_secids, cfg=cfg, window=window,
-                                    trade_date=trade_date, market_days=store.all_trading_days())
+    features = compute_box_features(
+        bars,
+        st_secids=st_secids,
+        cfg=cfg,
+        window=window,
+        trade_date=trade_date,
+        market_days=store.all_trading_days(),
+    )
     if features.empty:
         return features
     latest = bars[bars["date"] == trade_date]

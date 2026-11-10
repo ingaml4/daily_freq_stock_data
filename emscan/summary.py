@@ -238,7 +238,8 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
         pairs = [
             (index, r)
             for index, r in enumerate(rows)
-            if _num(r.get(flag)) == 1 and (flag != "s_vol_spike" or vol_up[index])
+            if _num(r.get(flag)) == 1
+            and (flag != "s_vol_spike" or vol_up[index])
             and (flag != "s_box_range" or r.get("box_rule_version") == "volume_breakout_v1")
         ]
         hit = [r for _, r in pairs]

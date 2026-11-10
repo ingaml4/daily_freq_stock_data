@@ -916,13 +916,27 @@ class Store:
             for flag in any_of:
                 if flag not in SIGNAL_FLAGS:
                     raise ValueError(f"未知信号标记：{flag!r}（可选 {', '.join(SIGNAL_FLAGS)}）")
-            sql += " AND (" + " OR ".join(
-                "(COALESCE(d.s_box_range,0)=1 AND d.box_rule_version='volume_breakout_v1')"
-                if flag == "s_box_range" else f"COALESCE(d.{flag}, 0)=1" for flag in any_of) + ")"
+            sql += (
+                " AND ("
+                + " OR ".join(
+                    (
+                        "(COALESCE(d.s_box_range,0)=1 AND d.box_rule_version='volume_breakout_v1')"
+                        if flag == "s_box_range"
+                        else f"COALESCE(d.{flag}, 0)=1"
+                    )
+                    for flag in any_of
+                )
+                + ")"
+            )
         if min_count and min_count > 0:
             total = " + ".join(
-                "CASE WHEN d.box_rule_version='volume_breakout_v1' THEN COALESCE(d.s_box_range,0) ELSE 0 END"
-                if flag == "s_box_range" else f"COALESCE(d.{flag},0)" for flag in SIGNAL_FLAGS)
+                (
+                    "CASE WHEN d.box_rule_version='volume_breakout_v1' THEN COALESCE(d.s_box_range,0) ELSE 0 END"
+                    if flag == "s_box_range"
+                    else f"COALESCE(d.{flag},0)"
+                )
+                for flag in SIGNAL_FLAGS
+            )
             sql += f" AND ({total}) >= ?"
             params.append(int(min_count))
         sql += " ORDER BY d.date DESC, d.secid"

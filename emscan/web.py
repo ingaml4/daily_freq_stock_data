@@ -362,7 +362,10 @@ VIEW_COLUMNS: Dict[str, tuple] = {
         "box_low",
         "box_avg_turnover",
         "box_avg_amplitude",
-        "ma5", "ma10", "ma20", "ma60",
+        "ma5",
+        "ma10",
+        "ma20",
+        "ma60",
     ),
     "reversal": BASE_COLUMNS
     + (
