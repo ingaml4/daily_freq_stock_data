@@ -1861,6 +1861,7 @@ def make_handler(
     view_help: Optional[Dict[str, str]] = None,
     summary_after_cfg: str = "17:00",
     backtest_cfg: Any = None,
+    auction_service=None,
 ) -> type:
     """生成一个 ``BaseHTTPRequestHandler`` 子类。
 
@@ -2006,6 +2007,34 @@ def make_handler(
                 else:
                     target = quote(_safe_next(self.path), safe="/?&=%")
                     self._redirect(f"/login?next={target}")
+                return
+
+            if path == "/api/auction-snapshot":
+                from .auction import AuctionRequestError
+                from .auction_archive import current_session, record_frames
+
+                status = 200
+                if not password or auction_service is None:
+                    status, result = 503, {"error": "auction_service_unavailable"}
+                elif set(parse_qs(parsed.query, keep_blank_values=True)) != {"symbols"} or len(
+                    parse_qs(parsed.query).get("symbols", [])
+                ) != 1:
+                    status, result = 400, {"error": "expected symbols only; live endpoint"}
+                else:
+                    try:
+                        symbols = params.get("symbols", "").split(",")
+                        with store_factory() as st:
+                            session = current_session(st, tz_today())
+                            archive = st.path.with_name(st.path.stem + "-auction.sqlite")
+                        result = auction_service.snapshot(symbols, is_trading_day=session)
+                        result["archive_status"] = record_frames(archive, result["items"])
+                    except AuctionRequestError as exc:
+                        status, result = 400, {"error": str(exc)}
+                    except Exception:
+                        log.error("竞价盘口读取失败")
+                        status, result = 503, {"error": "auction_snapshot_unavailable"}
+                self._send(json.dumps(result, ensure_ascii=False).encode("utf-8"), status,
+                           "application/json; charset=utf-8")
                 return
 
             if path == "/api/readiness":
@@ -2282,6 +2311,7 @@ def serve(
     summary_after_cfg: str = "17:00",
     backtest_cfg: Any = None,
     blocking: bool = True,
+    auction_service=None,
 ) -> ThreadingHTTPServer:
     """起一个网页服务，返回 server 对象（``blocking=False`` 时自己开线程，方便测试）。"""
     handler = make_handler(
@@ -2297,6 +2327,7 @@ def serve(
         view_help=view_help,
         summary_after_cfg=summary_after_cfg,
         backtest_cfg=backtest_cfg,
+        auction_service=auction_service,
     )
     httpd = ThreadingHTTPServer((host, int(port)), handler)
     log.info(

@@ -1560,6 +1560,10 @@ def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
         # 每个请求开一个连接：SQLite WAL 支持并发读，cron 正在写也不影响看页面
         return open_store(cfg)
 
+    from .auction import AuctionBookService
+
+    book_client = MairuiClient.from_config(cfg) if password and cfg.get("mairui.licence") else None
+    auction_service = AuctionBookService(fetch=book_client.fetch_order_book) if book_client else None
     try:
         serve(
             factory,
@@ -1575,11 +1579,15 @@ def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
             vol_up_min_pct=vol_up_min_pct,
             view_help=build_view_help(cfg),
             summary_after_cfg=summary_after(cfg),
+            auction_service=auction_service,
             backtest_cfg=cfg,  # 梯队回测页要用 backtest.*（入场价/持有期/默认天数）
         )
     except OSError as exc:
         log.error("端口 %s 起不来（%s）：换一个 --port，或先关掉占用的进程", port, exc)
         return 1
+    finally:
+        if book_client:
+            book_client.close()
     return 0
 
 
