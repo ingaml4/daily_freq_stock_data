@@ -23,9 +23,14 @@ def current_session(store, day):
 
 def record_frames(path, items):
     rows = [
-        (item["symbol"], item["received_at"], item["source_endpoint"],
-         json.dumps({**item, "cached": False}, ensure_ascii=False, allow_nan=False))
-        for item in items if item.get("upstream_requested")
+        (
+            item["symbol"],
+            item["received_at"],
+            item["source_endpoint"],
+            json.dumps({**item, "cached": False}, ensure_ascii=False, allow_nan=False),
+        )
+        for item in items
+        if item.get("upstream_requested")
     ]
     if not rows:
         return "no_upstream_frame"

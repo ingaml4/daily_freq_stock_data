@@ -2016,9 +2016,10 @@ def make_handler(
                 status = 200
                 if not password or auction_service is None:
                     status, result = 503, {"error": "auction_service_unavailable"}
-                elif set(parse_qs(parsed.query, keep_blank_values=True)) != {"symbols"} or len(
-                    parse_qs(parsed.query).get("symbols", [])
-                ) != 1:
+                elif (
+                    set(parse_qs(parsed.query, keep_blank_values=True)) != {"symbols"}
+                    or len(parse_qs(parsed.query).get("symbols", [])) != 1
+                ):
                     status, result = 400, {"error": "expected symbols only; live endpoint"}
                 else:
                     try:
@@ -2033,8 +2034,11 @@ def make_handler(
                     except Exception:
                         log.error("竞价盘口读取失败")
                         status, result = 503, {"error": "auction_snapshot_unavailable"}
-                self._send(json.dumps(result, ensure_ascii=False).encode("utf-8"), status,
-                           "application/json; charset=utf-8")
+                self._send(
+                    json.dumps(result, ensure_ascii=False).encode("utf-8"),
+                    status,
+                    "application/json; charset=utf-8",
+                )
                 return
 
             if path == "/api/readiness":

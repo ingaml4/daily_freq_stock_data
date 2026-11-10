@@ -1563,7 +1563,9 @@ def cmd_web(cfg: Config, args: argparse.Namespace) -> int:
     from .auction import AuctionBookService
 
     book_client = MairuiClient.from_config(cfg) if password and cfg.get("mairui.licence") else None
-    auction_service = AuctionBookService(fetch=book_client.fetch_order_book) if book_client else None
+    auction_service = (
+        AuctionBookService(fetch=book_client.fetch_order_book) if book_client else None
+    )
     try:
         serve(
             factory,
