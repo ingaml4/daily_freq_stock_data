@@ -1,7 +1,7 @@
 FROM node:24-slim AS ui-build
 WORKDIR /build
 RUN npm install --global pnpm@11.25.0
-COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./frontend/
+COPY frontend/package.json frontend/pnpm-lock.yaml ./frontend/
 RUN pnpm --dir frontend install --frozen-lockfile
 COPY frontend/ ./frontend/
 RUN pnpm --dir frontend build
