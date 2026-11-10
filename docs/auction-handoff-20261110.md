@@ -81,3 +81,9 @@ journalctl -u emscan-auction-validation.service --since '2026-11-11 09:14:00' --
 ## 发布前验证
 
 2026-11-10 在 Linux Python 3.9 隔离副本运行全套测试：334 passed（包含时间窗、日历、错误脱敏、0600 权限、原响应哈希以及旧接口兼容性），Black 检查通过。`systemd-analyze verify` 验证新增两个 unit，通过解析；首个 OnCalendar 归一为 2026-11-11 09:15:05 CST / 01:15:05 UTC。未调用付费行情接口。实际定时采样和竞价字段认证仍待明早。
+
+## 生产安装结果
+
+代码提交 `9203f9d` 已推送 GitHub 并在生产快进。`emscan-web` 于 2026-11-10 17:21:54（北京时间）重启且 active。`emscan-auction-validation.timer` 已启用且 active，实际 `TimersCalendar` 含上述四个时点，`Persistent=no`。既有 daily 任务未中断，完成状态为 success/0。
+
+闭市验证：认证请求 HTTP 200、无认证 401，契约 1.1、phase=closed、两只证券、upstream_requests=0，所有虚拟字段 null/gap。原响应示例在服务器 `/home/admin/daily_freq_stock_data/data/auction-validation/contract-20261110.json`，明确标注 `postclose_contract_only`，不能充当竞价实时证据。当前 CLI 返回 skipped_window，没有创建 11 日样本文件。明早验收仍看 `2026-11-11.jsonl` 的实际记录，不能把今晚的测试成功写成虚拟量已经可用。
