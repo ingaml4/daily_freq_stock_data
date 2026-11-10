@@ -209,13 +209,11 @@ button:focus-visible {
   letter-spacing: -0.2px;
 }
 .panel {
+  min-width: 0;
   padding: 22px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 11px;
-}
-.panel + .panel {
-  margin-top: 18px;
 }
 .data-note {
   color: var(--color-text-muted);
