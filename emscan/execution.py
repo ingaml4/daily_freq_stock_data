@@ -55,6 +55,16 @@ def _cost(price, qty, side, opts):
     return {"price": price, "shares": qty, "gross": gross, **parts, "cost": total, "cash": cash}
 
 
+def _settle(buy, day, price, opts):
+    sell = _cost(price, buy["shares"], "sell", opts)
+    return {
+        "sell": dict(sell, date=day),
+        "net_return": round(sell["cash"] / buy["cash"] - 1, 8),
+        "net_pnl": _money(sell["cash"] - buy["cash"]),
+        "total_cost": _money(buy["cost"] + sell["cost"]),
+    }
+
+
 def _board(secid):
     if secid.startswith(("1.600", "1.601", "1.603", "1.605", "0.000", "0.001", "0.002", "0.003")):
         return 10, 100
@@ -105,7 +115,7 @@ def _shares(price, minimum, opts):
     return count if count >= minimum else 0
 
 
-def simulate(row, days, idx, series, first_seen, horizons, opts):
+def simulate(row, days, idx, series, first_seen, horizons, opts, *, entry_floor=None):
     out = {"status": "pending_entry", "reason": "", "entry_attempts": [], "buy": None, "exits": {}}
     if row["status"] == "事后补生成" or (row.get("generated_at") or "")[:10] != row["date"]:
         out.update(status="excluded", reason="名单事后生成或生成时间缺失")
@@ -131,21 +141,27 @@ def simulate(row, days, idx, series, first_seen, horizons, opts):
             return out
         bar = series.get(day)
         reason, bounds = _session(bar, prev, limit)
+        if not reason and entry_floor is not None and bar["open"] <= entry_floor:
+            reason = "开盘价不高于名单日失效点，取消入场"
+            out["entry_attempts"].append({"date": day, "reason": reason})
+            out.update(status="entry_invalidated", reason=reason)
+            return out
         if not reason and bar["open"] >= bounds[1]:
             reason = "开盘涨停，买入排队不可确认"
+        if not reason:
+            qty = _shares(bar["open"], minimum, opts)
+            if not qty or qty > bar["volume"] * 100:
+                reason = "资金不足最小申报股数" if not qty else "买入数量超过全天成交量"
         if reason:
             out["entry_attempts"].append({"date": day, "reason": reason})
-            if reason not in ("停牌或零成交", "开盘涨停，买入排队不可确认"):
+            if not bounds and reason != "停牌或零成交":
                 out.update(status="unavailable", reason=reason)
                 return out
             if bounds:
                 prev = bar
-            continue
-        qty = _shares(bar["open"], minimum, opts)
-        if not qty or qty > bar["volume"] * 100:
-            reason = "资金不足最小申报股数" if not qty else "买入数量超过全天成交量"
-            out["entry_attempts"].append({"date": day, "reason": reason})
-            prev = bar
+                if entry_floor is not None and bar["close"] < entry_floor:
+                    out.update(status="entry_invalidated", reason="等待入场时收盘跌破失效点")
+                    return out
             continue
         idx_buy = n
         prev = bar
@@ -156,6 +172,8 @@ def simulate(row, days, idx, series, first_seen, horizons, opts):
         return out
 
     out.update(status="entered", reason="")
+    if not horizons:
+        return out
     # 持仓跨日若参考价变化或缺行情，现金分红/送转与路径无法核验，不再计算该段净收益。
     pending = {
         h: {"status": "pending_exit", "target_date": None, "attempts": [], "reason": "尚未到期"}
@@ -187,16 +205,7 @@ def simulate(row, days, idx, series, first_seen, horizons, opts):
                 item["attempts"].append({"date": day, "reason": blocked})
                 item.update(status="blocked_exit", reason=blocked)
                 continue
-            sell = _cost(bar["close"], qty, "sell", opts)
-            paid = out["buy"]["cash"]
-            item.update(
-                status="closed",
-                reason="",
-                sell=dict(sell, date=day),
-                net_return=round(sell["cash"] / paid - 1, 8),
-                net_pnl=_money(sell["cash"] - paid),
-                total_cost=_money(out["buy"]["cost"] + sell["cost"]),
-            )
+            item.update(status="closed", reason="", **_settle(out["buy"], day, bar["close"], opts))
         if bounds:
             prev = bar
         if all(item["status"] in ("closed", "unavailable") for item in pending.values()):
