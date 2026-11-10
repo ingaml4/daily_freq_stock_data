@@ -69,7 +69,7 @@ mairui:
 #   enabled: false
 #   webhook: {type: feishu, url: ""}
 
-# 箱体震荡 + 换手健康（做 T 备选池）——网页第 5 个按钮"箱体做T"
+# 历史箱体整理 + 当日放量突破箱体上沿——网页第 5 个按钮"箱体放量突破"
 # box:
 #   enabled: true
 #   window: 40                 # 回看多少交易日（40 ≈ 2 个月）

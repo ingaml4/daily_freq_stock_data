@@ -99,7 +99,7 @@ DeepSeek 返回 HTTP 402 时保存欠费事件，本机收盘自动化运行 `py
 | `python3 -m emscan indicators [--kinds macd,kdj,boll]` | 补齐日频技术指标 |
 | `python3 -m emscan scan [--trade-date YYYY-MM-DD]` | 用本地数据做放量扫描（可回看历史某天） |
 | `python3 -m emscan signals [--rules ...] [--trade-date ...]` | 用本地数据筛指标信号 |
-| `python3 -m emscan box [--trade-date ...]` | 筛**箱体震荡 + 换手健康**的票（做 T 备选池） |
+| `python3 -m emscan box [--trade-date ...]` | 筛**放量突破历史箱体上沿**的票 |
 | `python3 -m emscan doji [--trade-date ...]` | 筛**低位缩量十字星**（超跌企稳观察信号） |
 | `python3 -m emscan industry [--force] [--kinds sw,sw2]` | 同步**行业/概念归属**（复盘"行业维度"靠它，源数据每周六更新） |
 | `python3 -m emscan tiers [--sync] [--days N] [--json] [--out x.csv]` | **复盘梯队回测**：第一/第二梯队的 1/5/10/20 交易日跟踪（含超额） |
@@ -196,30 +196,17 @@ WHERE date = '2026-10-13' AND s_vol_spike = 1 AND s_macd_golden = 1
 ORDER BY vol_ratio_5 DESC;
 ```
 
-## 箱体做T：找"长期磨箱体 + 换手健康"的票
+## 箱体放量突破
 
-做 T（日内高抛低吸）要的不是趋势股，而是在一个箱体里来回磨、且换手健康的票。
-`emscan box` 用最近 **40 个交易日（≈2 个月）** 的日线判断，全部条件满足才算命中：
+`emscan box` 观察收盘是否放量突破此前40个市场交易日构成的箱体。箱顶为历史最高价，箱底为历史最低价，当日不参与边界计算。历史窗口沿用箱体宽度6%～35%、净涨跌幅不超过12%、MA5/MA20间距不超过4%、换手与振幅等整理条件。
 
-| 条件 | 默认阈值（`config.yaml` 的 `box:` 段） | 为什么 |
-| --- | --- | --- |
-| 箱体高度 `(箱顶-箱底)/箱底` | 6% ~ 35% | 太窄做不出差价，太宽就不是箱体 |
-| 窗口内净涨跌幅 | \|净涨跌\| ≤ 12% | 单边涨/跌就是在趋势里，不是震荡 |
-| 均线缠绕 `\|MA5-MA20\|/MA20` | ≤ 4% | 均线缠在一起才是震荡格局 |
-| 日均换手率 | 1% ~ 15% | 太低进出困难，太高是妖股博弈 |
-| 换手率变异系数 `std/mean` | ≤ 1.0 | 换手"健康稳定"，不是忽冷忽热 |
-| 日均振幅 | 2% ~ 9% | 日内得有波动才有的做 |
-| 窗口内 \|涨跌幅\|≥9.5% 天数 | ≤ 2 天 | 连板/天地板不适合做 T |
-| 当日成交额 | ≥ 3000 万 | 流动性底线 |
-| 有效交易日（非停牌） | ≥ 35 天 | 数据太残缺不看 |
+命中还要求当日有效成交、收盘严格高于箱顶，且满足现有放量扫描的成交额、换手与样本门槛及量比5≥2且（量比20≥1.5或Z60≥3）。历史均量不含当日。量比阈值继续由 `scan` 配置统一控制。最近一个市场交易日缺少有效行情时不把复牌前旧报价拼为连续突破；40个市场日窗口内至少35根有效日线，停牌缺口不向更早日期借数据。科创板和ST不参与。
 
-结果按 **箱体位置升序** 排（`box_pos`：0=贴箱底、1=贴箱顶），越靠箱底越靠前；
-报告里同时给出箱顶/箱底、箱体高度、日均换手、日均振幅，便于你定高抛低吸价位。
-网页端它是第 5 个按钮（**箱体做T**），和放量/MACD金叉/KDJ金叉/布林下轨同级，表头同样可点排序。
+网页按钮为**箱体放量突破**，按 `box_breakout_pct=收盘/历史箱顶-1` 降序排列，同时显示量比5、量比20及原箱体边界。`box_pos` 仍表示 `(收盘-箱底)/(箱顶-箱底)`，突破时大于1。`box_range` 路由及 `s_box_range` 标记为兼容继续保留；新计算行以 `box_rule_version=volume_breakout_v1` 标识。历史旧行的版本为空、原标记和数值保留，信号文本为 `box_range_legacy`，新版筛选与复盘不将其当成突破。升级后仅重算需要的最新日，历史复盘正文与AI榜单不被重写。
 
 ```bash
-python3 -m emscan box                       # 出报告（box_<交易日>.csv/xlsx）+ 写缓存
-python3 -m emscan hits --only box_range      # 只查缓存里的箱体票
+python3 -m emscan box --trade-date YYYY-MM-DD
+python3 -m emscan hits --only box_range
 ```
 
 ## 梯队可执行 T+1 模拟
@@ -358,7 +345,7 @@ python3 -m emscan web --host 0.0.0.0 --password 我的口令   # 对外暴露：
 ⑤ 指标缺口      交易日历 vs 本地 indicators  → MACD/KDJ/BOLL 各自单独比对、单独补
 ⑥ 放量扫描      scan.py（纯本地计算）        → volscan_<交易日>.csv/xlsx + 写 daily_signals
 ⑦ 指标信号      signals.py（纯本地计算）     → signals_<交易日>.csv/xlsx + 写 daily_signals
-⑧ 箱体做T       box.py（纯本地计算）          → box_<交易日>.csv/xlsx + 写 daily_signals
+⑧ 箱体放量突破       box.py（纯本地计算）          → box_<交易日>.csv/xlsx + 写 daily_signals
 ⑨ 低位十字星    doji.py（纯本地计算）         → doji_<交易日>.csv/xlsx + 写 daily_signals
 ```
 

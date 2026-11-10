@@ -131,10 +131,10 @@ DEFAULTS: Dict[str, Any] = {
         "horizons": [1, 5, 10, 20],  # 交易日
         "days": 90,  # 页面上默认看最近多少个名单日
     },
-    # 箱体震荡 + 换手健康（做 T 备选池）——判定口径见 emscan/box.py 顶部注释
+    # 历史箱体整理 + 当日放量收盘突破——判定口径见 emscan/box.py 顶部注释
     "box": {
         "enabled": True,
-        "window": 40,  # 回看多少个交易日（40 ≈ 2 个月）
+        "window": 40,  # 突破日前回看多少个市场交易日（40 ≈ 2 个月）
         "min_width": 0.06,  # 箱体相对高度下限（(箱顶-箱底)/箱底）
         "max_width": 0.35,  # 上限（太宽就不是箱体了）
         "max_net_chg": 0.12,  # 窗口内净涨跌幅绝对值上限（超过就是在趋势里）
@@ -144,7 +144,7 @@ DEFAULTS: Dict[str, Any] = {
         "max_turnover_cv": 1.0,  # 换手率变异系数上限（越小越"健康稳定"）
         "min_avg_amplitude": 2.0,  # 日均振幅下限（%）——太小做不出差价
         "max_avg_amplitude": 9.0,  # 上限（%）
-        "max_extreme_days": 2,  # 窗口内 |涨跌幅|>=9.5% 的天数上限（连板票不适合做 T）
+        "max_extreme_days": 2,  # 窗口内接近板块涨跌幅上限的天数上限
         "min_amount": 30_000_000,  # 当日成交额下限（元）
         "min_valid_days": 35,  # 窗口内有效交易日下限（停牌剔除）
         "top_n": 100,

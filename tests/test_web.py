@@ -642,7 +642,7 @@ def test_page_shows_latest_day_and_staleness_banner(tmp_path):
 
 
 def test_box_view_is_a_first_class_button(tmp_path):
-    """第五个按钮"箱体做T"：和放量/金叉同级，展示箱体列，按箱体位置升序。"""
+    """第五个按钮"箱体放量突破"：和放量/金叉同级，展示箱体列，按箱体位置升序。"""
     _, store, date = _seed(tmp_path)
     store.upsert_daily_signals(
         [
@@ -654,6 +654,8 @@ def test_box_view_is_a_first_class_button(tmp_path):
                 "volume": 100000.0,
                 "amount": 1.0e8,
                 "s_box_range": 1,
+                "box_rule_version": "volume_breakout_v1",
+                "box_breakout_pct": 0.03,
                 "box_pos": 0.25,
                 "box_width": 0.09,
                 "box_high": 10.9,
@@ -670,13 +672,13 @@ def test_box_view_is_a_first_class_button(tmp_path):
     base = f"http://127.0.0.1:{httpd.server_port}"
     try:
         page = urllib.request.urlopen(f"{base}/signals/box_range", timeout=10).read().decode()
-        assert "箱体做T" in page  # 导航按钮
+        assert "箱体放量突破" in page  # 导航按钮
         assert "箱体位置" in page and "日均换手%" in page
         assert "600000" in page  # 命中的票出现在表里
         payload = json.loads(
             urllib.request.urlopen(f"{base}/api/signals?view=box_range", timeout=10).read()
         )
-        assert payload["sort"] == "box_pos" and payload["order"] == "asc"
+        assert payload["sort"] == "box_breakout_pct" and payload["order"] == "desc"
         assert [r["code"] for r in payload["rows"]] == ["600000"]
     finally:
         httpd.shutdown()

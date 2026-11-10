@@ -91,7 +91,7 @@ def build_view_help(cfg) -> Dict[str, str]:
             ],
         ),
         "box_range": _help_block(
-            f"箱体做T（{box_w} 个交易日 ≈ {box_months:.0f} 个月）",
+            f"放量突破箱体上沿（此前{box_w}个市场交易日）",
             [
                 f"箱体高度 {float(g('box.min_width', 0.06) or 0.06) * 100:.0f}% ~ "
                 f"{float(g('box.max_width', 0.35) or 0.35) * 100:.0f}%，"
@@ -105,7 +105,9 @@ def build_view_help(cfg) -> Dict[str, str]:
                 f"|涨跌| ≥ 9.5% 的天数 ≤ {g('box.max_extreme_days', 2)}",
                 f"成交额 ≥ {round(float(g('box.min_amount', 0) or 0) / 10000)} 万元，"
                 f"有效交易日 ≥ {g('box.min_valid_days', 35)}",
-                "按箱体位置升序（0 = 贴箱底），方便高抛低吸",
+                "箱顶取突破日前窗口内最高价，箱底取最低价；当日不进入边界计算",
+                "当日收盘严格高于箱顶；放量与原扫描一致：量比5达到2，且量比20达到1.5或Z60达到3（按scan配置）",
+                "按突破幅度降序；原箱体位置大于1表示已突破",
             ],
         ),
         "reversal": _help_block(

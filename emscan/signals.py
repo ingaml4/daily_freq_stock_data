@@ -107,6 +107,8 @@ RULE_FLAG_COLUMNS: Dict[str, str] = {
 # 标记列 -> 中文名（报告、网页、命令行都用同一份，避免各处自己拼）
 FLAG_LABELS: Dict[str, str] = {
     "s_vol_spike": "突然放量",
+    "s_box_range": "箱体放量突破",
+    "s_box_range_legacy": "历史箱体震荡（旧规则）",
     "s_macd_golden": "MACD金叉",
     "s_kdj_golden": "KDJ金叉",
     "s_boll_break_lower": "BOLL下轨突破",

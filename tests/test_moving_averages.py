@@ -109,7 +109,7 @@ def test_same_day_box_cache_and_risk_match_sh603986(tmp_path):
             assert item["distance_pct"] == pytest.approx((238.41 / value - 1) * 100)
         box = box_features(st, cfg, days[-1]).iloc[0]
         assert box.box_ma_gap == pytest.approx(
-            abs(ma["ma5"]["value"] - ma["ma20"]["value"]) / ma["ma20"]["value"]
+            abs(sum(closes[-6:-1]) / 5 - sum(closes[-21:-1]) / 20) / (sum(closes[-21:-1]) / 20)
         )
         assert st.conn.execute("select s_box_range from daily_signals").fetchone()[0] == 1
 

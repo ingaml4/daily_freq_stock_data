@@ -47,7 +47,7 @@ VIEW_LABELS = {
     "s_macd_golden": "MACD金叉",
     "s_kdj_golden": "KDJ金叉",
     "s_boll_break_lower": "布林下轨",
-    "s_box_range": "箱体做T",
+    "s_box_range": "箱体放量突破",
     "s_reversal": "反转信号",
 }
 VIEW_METRICS = {
@@ -55,7 +55,7 @@ VIEW_METRICS = {
     "s_macd_golden": ("macd_diff", "DIFF"),
     "s_kdj_golden": ("kdj_j", "J"),
     "s_boll_break_lower": ("boll_pos", "布林位置"),
-    "s_box_range": ("box_pos", "箱体位置"),
+    "s_box_range": ("box_breakout_pct", "突破幅度"),
     "s_reversal": ("rev_signals", "证据"),
 }
 
@@ -239,6 +239,7 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
             (index, r)
             for index, r in enumerate(rows)
             if _num(r.get(flag)) == 1 and (flag != "s_vol_spike" or vol_up[index])
+            and (flag != "s_box_range" or r.get("box_rule_version") == "volume_breakout_v1")
         ]
         hit = [r for _, r in pairs]
         hit_indexes.update(index for index, _ in pairs)
@@ -251,7 +252,7 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
             "s_macd_golden": lambda r: abs(_num(r.get("macd_bar")) or 0),
             "s_kdj_golden": lambda r: abs((_num(r.get("kdj_j")) or 0) - 50),
             "s_boll_break_lower": lambda r: -(_num(r.get("boll_pos")) or 0),
-            "s_box_range": lambda r: -(_num(r.get("box_pos")) or 0),
+            "s_box_range": lambda r: _num(r.get("box_breakout_pct")) or 0,
             "s_reversal": lambda r: _num(r.get("rev_score")) or 0,
         }[flag]
         ranked = sorted(hit, key=lambda r: (boost(r), _num(r.get("amount")) or 0), reverse=True)

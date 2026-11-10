@@ -232,6 +232,9 @@ VIEWS: Dict[str, Dict[str, str]] = {
             "pct_chg",
             "amount_yi",
             "turnover",
+            "box_breakout_pct",
+            "vol_ratio_5",
+            "vol_ratio_20",
             "box_pos",
             "box_width",
             "box_high",
@@ -239,7 +242,7 @@ VIEWS: Dict[str, Dict[str, str]] = {
             "box_avg_turnover",
             "box_avg_amplitude",
         ),
-        "nav": "箱体做T",
+        "nav": "箱体放量突破",
         "columns": (
             "code",
             "name",
@@ -248,6 +251,9 @@ VIEWS: Dict[str, Dict[str, str]] = {
             "pct_chg",
             "amount_yi",
             "turnover",
+            "box_breakout_pct",
+            "vol_ratio_5",
+            "vol_ratio_20",
             "box_pos",
             "box_width",
             "box_high",
@@ -255,9 +261,9 @@ VIEWS: Dict[str, Dict[str, str]] = {
             "box_avg_turnover",
             "box_avg_amplitude",
         ),
-        "title": "箱体震荡 + 换手健康（做 T 备选：越贴箱底越靠前）",
-        "sort": "box_pos",
-        "order": "asc",
+        "title": "放量突破箱体上沿（收盘确认，按突破幅度排序）",
+        "sort": "box_breakout_pct",
+        "order": "desc",
     },
 }
 
@@ -347,6 +353,9 @@ VIEW_COLUMNS: Dict[str, tuple] = {
     "boll_break_lower": BASE_COLUMNS + ("boll_pos", "boll_lower", "boll_mid", "boll_upper"),
     "box_range": BASE_COLUMNS
     + (
+        "box_breakout_pct",
+        "vol_ratio_5",
+        "vol_ratio_20",
         "box_pos",
         "box_width",
         "box_high",
@@ -395,7 +404,8 @@ COLUMNS: Tuple[Tuple[str, str, Optional[str], bool], ...] = (
     ("kdj_k", "K", "{:.1f}", True),
     ("kdj_d", "D", "{:.1f}", True),
     ("kdj_j", "J", "{:.1f}", True),
-    ("box_pos", "箱体位置", "{:.2f}", True),
+    ("box_pos", "相对原箱体位置", "{:.2f}", True),
+    ("box_breakout_pct", "突破幅度", "{:.2%}", True),
     ("box_width", "箱体高度", "{:.1%}", True),
     ("box_high", "箱顶", "{:.2f}", True),
     ("box_low", "箱底", "{:.2f}", True),
@@ -703,6 +713,9 @@ def build_context(
         "COALESCE(d.volume, 1) > 0",  # 明确停牌（volume=0）不显示；NULL 视为"没记录"放行
     ]
     params: List[Any] = [ctx.date]
+    if ctx.view == "box_range":
+        where.append("d.box_rule_version = ?")
+        params.append("volume_breakout_v1")
     if spec.get("min_pct_chg"):  # 放量大涨：只留当日上涨的，放量下跌/滞涨不展示
         where.append("COALESCE(d.pct_chg, -999) >= ?")
         params.append(float(vol_up_min_pct))
@@ -888,6 +901,7 @@ def _row_payload(row: Any) -> Dict[str, Any]:
     board_label = BOARD_LABELS.get(str(row["board"]), str(row["board"] or ""))
     item: Dict[str, Any] = {
         "secid": secid,
+        "box_rule_version": row["box_rule_version"] if "box_rule_version" in row.keys() else None,
         "board_group": BOARD_GROUPS.get(board_label, board_label),
         "code": str(row["code"] or secid.split(".")[-1]),
         "name": str(row["name"] or ""),

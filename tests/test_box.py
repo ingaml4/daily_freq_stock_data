@@ -1,10 +1,10 @@
-"""箱体震荡 + 换手健康（做 T 备选池）测试。"""
+"""历史箱体整理、放量与收盘突破的回归测试。"""
 
 import pandas as pd
 import pytest
 from helpers import bar, make_cfg, trading_dates
 
-from emscan.box import compute_box_features, scan_box
+from emscan.box import BOX_RULE_VERSION, compute_box_features, scan_box
 from emscan.cli import main, open_store
 
 WINDOW = 40
@@ -13,6 +13,8 @@ WINDOW = 40
 def _series(
     secid, closes, turnover=3.0, amplitude=3.0, pct_chg=0.0, amount=1.0e8, end="2026-10-09"
 ):
+    # 最后一根为突破日，边界仅取此前窗口；历史均量排除最后一根。
+    closes = list(closes) + [max(closes) * 1.04]
     dates = trading_dates(len(closes), end=end)
     rows = []
     for date, close in zip(dates, closes):
@@ -20,6 +22,7 @@ def _series(
         item["turnover"] = turnover
         item["amplitude"] = amplitude
         rows.append(item)
+    rows[-1]["volume"] = 250000.0
     return rows, dates
 
 
@@ -28,17 +31,19 @@ def _zigzag(n=WINDOW, low=10.0, high=10.8):
     return [low + (high - low) * (0.5 + 0.5 * (-1) ** i) for i in range(n)]
 
 
-def test_box_detects_range_bound_with_healthy_turnover():
+def test_box_detects_volume_confirmed_breakout():
     rows, dates = _series("1.600001", _zigzag())
     features = compute_box_features(pd.DataFrame(rows))
     assert len(features) == 1
     row = features.iloc[0]
     assert row["s_box_range"] == 1
     assert row["box_days"] == WINDOW
-    assert row["box_low"] == pytest.approx(10.0)
-    assert row["box_high"] == pytest.approx(10.8)
-    assert row["box_width"] == pytest.approx(0.08, abs=1e-6)
-    assert 0 <= row["box_pos"] <= 1
+    assert row["box_low"] == pytest.approx(9.9)
+    assert row["box_high"] == pytest.approx(10.908)
+    assert row["box_width"] == pytest.approx((10.908 - 9.9) / 9.9, abs=1e-6)
+    assert row["box_pos"] > 1
+    assert row["box_rule_version"] == BOX_RULE_VERSION
+    assert row["vol_ratio_5"] == pytest.approx(2.5)
     assert row["box_avg_turnover"] == pytest.approx(3.0)
     assert row["box_avg_amplitude"] == pytest.approx(3.0)
 
@@ -76,13 +81,16 @@ def test_box_rejects_st_and_short_history():
     # 有效交易日不足
     short = frame.tail(10)
     features = compute_box_features(short)
-    assert features.iloc[0]["s_box_range"] == 0 and features.iloc[0]["box_days"] == 10
+    assert features.iloc[0]["s_box_range"] == 0 and features.iloc[0]["box_days"] == 9
 
 
 def test_box_accepts_values_exactly_on_the_threshold():
     """阈值正好卡边界（浮点会算出 0.059999…）不能误杀：10.0~10.6 就是 6% 的箱子。"""
     closes = [10.0 + (0.6 if i % 2 else 0.0) for i in range(WINDOW)]
     rows, _ = _series("1.600001", closes, turnover=1.0, amplitude=2.0)
+    for r in rows[:-1]:
+        r["high"] = r["close"]
+        r["low"] = r["close"]
     row = compute_box_features(pd.DataFrame(rows)).iloc[0]
     assert row["box_width"] == pytest.approx(0.06, abs=1e-6)
     assert row["s_box_range"] == 1
@@ -163,5 +171,44 @@ def test_box_command_writes_cache(tmp_path):
     assert len(frame) == 1
     row = frame.iloc[0]
     assert row["s_box_range"] == 1
-    assert row["box_width"] == pytest.approx(0.08, abs=1e-6)
+    assert row["box_width"] == pytest.approx((10.908 - 9.9) / 9.9, abs=1e-6)
     assert "box_range" in str(row["signals"])
+
+
+@pytest.mark.parametrize("close,volume", [(10.85, 250000.0), (11.2, 100000.0), (10.8, 400000.0)])
+def test_wick_or_weak_volume_never_confirms_breakout(close, volume):
+    rows, _ = _series("1.600001", _zigzag(60))
+    rows[-1].update(close=close, high=max(11.3, close), volume=volume)
+    row = compute_box_features(pd.DataFrame(rows)).iloc[0]
+    assert row["s_box_range"] == 0
+    assert row["box_high"] == pytest.approx(10.908)
+
+
+def test_signal_day_does_not_raise_box_edge_or_dilute_volume():
+    rows, _ = _series("1.600001", _zigzag(60))
+    rows[-1].update(close=11.2, high=20, volume=200000)
+    row = compute_box_features(pd.DataFrame(rows)).iloc[0]
+    assert row["box_high"] == pytest.approx(10.908)
+    assert row["vol_ratio_5"] == pytest.approx(2)
+    assert row["s_box_range"] == 1
+
+
+def test_missing_previous_market_session_or_star_board_is_excluded():
+    rows, dates = _series("1.600001", _zigzag(60))
+    missing = pd.DataFrame([r for r in rows if r["date"] != dates[-2]])
+    row = compute_box_features(missing, market_days=dates).iloc[0]
+    assert row["s_box_range"] == 0
+    for r in rows:
+        r["secid"] = "1.688001"
+    assert compute_box_features(pd.DataFrame(rows)).iloc[0]["s_box_range"] == 0
+
+
+def test_old_cache_rows_keep_their_original_version_and_are_not_new_hits(tmp_path):
+    store = open_store(make_cfg(tmp_path))
+    day = "2026-11-09"
+    store.upsert_daily_signals([dict(secid="1.600001",date=day,s_box_range=1)])
+    row = store.conn.execute("SELECT s_box_range,box_rule_version,signals FROM daily_signals_named").fetchone()
+    assert row["s_box_range"] == 1 and row["box_rule_version"] is None
+    assert row["signals"] == "box_range_legacy"
+    assert store.load_daily_signals(only=["s_box_range"]).empty
+    store.close()

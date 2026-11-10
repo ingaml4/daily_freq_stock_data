@@ -27,7 +27,7 @@ from .mairui import BAR_FIELDS, INDICATOR_MAP
 log = logging.getLogger(__name__)
 
 # 表结构版本号：改 SCHEMA / 迁移逻辑就 +1（init_schema 靠它决定要不要重建）
-SCHEMA_VERSION = 13  # 复盘原文版本和逐股入池依据
+SCHEMA_VERSION = 14  # 箱体突破规则版本与突破幅度
 
 DAILY_SIGNALS_VIEW = """CREATE VIEW IF NOT EXISTS daily_signals_named AS
 SELECT
@@ -44,7 +44,8 @@ SELECT
         CASE WHEN s_ma_dead          THEN 'ma_dead,'          ELSE '' END ||
         CASE WHEN s_boll_upper       THEN 'boll_upper,'       ELSE '' END ||
         CASE WHEN s_boll_break_upper THEN 'boll_break_upper,' ELSE '' END ||
-        CASE WHEN s_box_range        THEN 'box_range,'         ELSE '' END ||
+        CASE WHEN s_box_range AND box_rule_version='volume_breakout_v1' THEN 'box_range,'
+             WHEN s_box_range THEN 'box_range_legacy,' ELSE '' END ||
         CASE WHEN s_low_doji         THEN 'low_doji,'          ELSE '' END ||
         CASE WHEN s_reversal         THEN 'reversal,'          ELSE '' END,
         ','
@@ -157,7 +158,9 @@ CREATE TABLE IF NOT EXISTS daily_signals (
     ma10               REAL,
     ma20               REAL,
     ma60               REAL,
-    -- 箱体震荡（做 T 备选池）指标
+    -- 箱体历史边界与放量突破指标
+    box_rule_version   TEXT,
+    box_breakout_pct   REAL,
     box_high           REAL,
     box_low            REAL,
     box_width          REAL,
@@ -355,6 +358,8 @@ DAILY_SIGNAL_COLUMNS: tuple = (
     "ma10",
     "ma20",
     "ma60",
+    "box_rule_version",
+    "box_breakout_pct",
     "box_high",
     "box_low",
     "box_width",
@@ -502,7 +507,7 @@ class Store:
                 if column.startswith("s_") or column in ("box_days", "reversal_bars", "valid_bars")
                 else "REAL"
             )
-            if column in ("vol_signal", "computed_at"):
+            if column in ("vol_signal", "computed_at", "box_rule_version"):
                 kind = "TEXT"
             log.info("行情库升级：daily_signals 表新增列 %s", column)
             self.conn.execute(f"ALTER TABLE daily_signals ADD COLUMN {column} {kind}")
@@ -903,11 +908,15 @@ class Store:
             if flag not in SIGNAL_FLAGS:
                 raise ValueError(f"未知信号标记：{flag!r}（可选 {', '.join(SIGNAL_FLAGS)}）")
             sql += f" AND COALESCE(d.{flag}, 0) = 1"
+            if flag == "s_box_range":
+                sql += " AND d.box_rule_version='volume_breakout_v1'"
         if any_of:
             for flag in any_of:
                 if flag not in SIGNAL_FLAGS:
                     raise ValueError(f"未知信号标记：{flag!r}（可选 {', '.join(SIGNAL_FLAGS)}）")
-            sql += " AND (" + " OR ".join(f"COALESCE(d.{flag}, 0) = 1" for flag in any_of) + ")"
+            sql += " AND (" + " OR ".join(
+                "(COALESCE(d.s_box_range,0)=1 AND d.box_rule_version='volume_breakout_v1')"
+                if flag == "s_box_range" else f"COALESCE(d.{flag}, 0)=1" for flag in any_of) + ")"
         if min_count and min_count > 0:
             total = " + ".join(f"COALESCE(d.{flag}, 0)" for flag in SIGNAL_FLAGS)
             sql += f" AND ({total}) >= ?"

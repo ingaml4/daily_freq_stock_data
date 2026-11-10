@@ -112,6 +112,7 @@ HITS_COLUMNS = (
     "macd_dea",
     "kdj_k",
     "kdj_d",
+    "box_breakout_pct",
     "box_pos",
     "box_width",
     "box_high",
@@ -142,7 +143,9 @@ HITS_LABELS = {
     "macd_dea": "DEA",
     "kdj_k": "K",
     "kdj_d": "D",
-    "box_pos": "箱体位置",
+    "box_pos": "相对原箱体位置",
+    "box_breakout_pct": "突破幅度",
+    "box_rule_version": "箱体规则版本",
     "box_width": "箱体高度",
     "box_high": "箱顶",
     "box_low": "箱底",
@@ -168,6 +171,7 @@ HITS_FORMATS = {
     "kdj_k": "{:.1f}",
     "kdj_d": "{:.1f}",
     "box_pos": "{:.2f}",
+    "box_breakout_pct": "{:.2%}",
     "box_width": "{:.1%}",
     "box_high": "{:.2f}",
     "box_low": "{:.2f}",
@@ -573,7 +577,7 @@ def _cache_signal_result(store: Store, result) -> int:
 
 
 def cmd_box(cfg: Config, args: argparse.Namespace) -> int:
-    """筛"长期箱体震荡 + 换手健康"的票（做 T 备选池），并写进每日信号缓存。"""
+    """筛"放量收盘突破历史箱体上沿"的票，并写进每日信号缓存。"""
     store = open_store(cfg)
     trade_date = getattr(args, "trade_date", None) or store.latest_date()
     if not trade_date:
@@ -599,25 +603,25 @@ def cmd_box(cfg: Config, args: argparse.Namespace) -> int:
         log.info("每日信号缓存已更新：%s 行（箱体特征 + 命中标记）", written)
 
     if hits.empty:
-        print(f"箱体做T筛选 | 交易日 {trade_date}\n（没有符合条件的票）")
+        print(f"箱体放量突破筛选 | 交易日 {trade_date}\n（没有符合条件的票）")
         write_files(
             _BoxResult(trade_date, pd.DataFrame(columns=BOX_REPORT_COLUMNS)),
             cfg,
             prefix="box",
-            sheet_name="箱体做T",
+            sheet_name="箱体放量突破",
         )
         store.record_run("box", trade_date=trade_date, scanned=len(features), hits=0)
         store.close()
         return 0
     hits["amount_yi"] = hits["amount"] / 1e8
-    hits = hits.sort_values(["box_pos", "box_avg_turnover"], ascending=[True, False])
+    hits = hits.sort_values(["box_breakout_pct", "vol_ratio_5"], ascending=[False, False])
     hits["trade_date"] = trade_date
     top_n = int(cfg.get("box.top_n", 100) or 100)
     hits = hits.head(top_n)
-    title = f"箱体震荡 + 换手健康（做 T 备选）| 交易日 {trade_date}"
+    title = f"放量突破箱体上沿| 交易日 {trade_date}"
     summary = (
-        f"{title}\n命中 {len(hits)} 只 · 按箱体位置升序（越贴箱底越靠前）\n"
-        f"口径：{window} 日箱体高度 {cfg.get('box.min_width')}~{cfg.get('box.max_width')}、"
+        f"{title}\n命中 {len(hits)} 只 · 按突破幅度降序，量比次序\n"
+        f"口径：收盘突破此前{window}个市场交易日最高价，命中原放量扫描；历史箱体高度 {cfg.get('box.min_width')}~{cfg.get('box.max_width')}、"
         f"净涨跌 ≤{cfg.get('box.max_net_chg')}、日均换手 "
         f"{cfg.get('box.min_avg_turnover')}~{cfg.get('box.max_avg_turnover')}%、"
         f"日均振幅 {cfg.get('box.min_avg_amplitude')}~{cfg.get('box.max_avg_amplitude')}%"
@@ -629,7 +633,7 @@ def cmd_box(cfg: Config, args: argparse.Namespace) -> int:
         float_formats=HITS_FORMATS,
         summary=summary,
     )
-    files = write_files(_BoxResult(trade_date, hits), cfg, prefix="box", sheet_name="箱体做T")
+    files = write_files(_BoxResult(trade_date, hits), cfg, prefix="box", sheet_name="箱体放量突破")
     for path in files:
         log.info("报告已写出：%s", path)
     store.record_run("box", trade_date=trade_date, scanned=None, hits=len(hits))
@@ -653,6 +657,7 @@ BOX_REPORT_COLUMNS = (
     "close",
     "pct_chg",
     "amount_yi",
+    "box_breakout_pct",
     "box_pos",
     "box_width",
     "box_high",
@@ -1120,6 +1125,8 @@ def cmd_hits(cfg: Config, args: argparse.Namespace) -> int:
         join_symbols=True,
         limit=int(getattr(args, "limit", 500) or 500),
     )
+    if only and "s_box_range" in only and not frame.empty:
+        frame = frame[frame["box_rule_version"] == "volume_breakout_v1"]
     # 行业列（同步过板块归属才有）：跑命令时能直接看出"这批票集中在哪些行业"
     industry_label, industry = industry_map(store, cfg)
     store.close()
@@ -1643,7 +1650,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="指标来源：local=本地按日线算（默认，零请求）；api=拉麦蕊接口",
     )
 
-    p_box = sub.add_parser("box", help="筛箱体震荡 + 换手健康的票（做 T 备选池）")
+    p_box = sub.add_parser("box", help="筛放量突破历史箱体上沿的票")
     p_box.add_argument("--trade-date", dest="trade_date", help="交易日 YYYY-MM-DD（默认最新）")
 
     p_doji = sub.add_parser("doji", help="筛低位缩量十字星（超跌企稳观察）")
