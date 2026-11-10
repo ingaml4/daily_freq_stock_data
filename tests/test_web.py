@@ -673,6 +673,7 @@ def test_box_view_is_a_first_class_button(tmp_path):
     try:
         page = urllib.request.urlopen(f"{base}/signals/box_range", timeout=10).read().decode()
         assert "箱体放量突破" in page  # 导航按钮
+        assert "emscan_sort_box_volume_breakout_v1" in page
         assert "箱体位置" in page and "日均换手%" in page
         assert "600000" in page  # 命中的票出现在表里
         payload = json.loads(

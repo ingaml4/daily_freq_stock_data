@@ -1352,6 +1352,8 @@ def render_html(
         .replace("__PAGE_SIZE__", str(int(page_size)))
         .replace("__TOTAL__", str(int(ctx.total)))
     )
+    if ctx.view == "box_range":
+        js_rendered = js_rendered.replace("emscan_sort", "emscan_sort_box_volume_breakout_v1")
     pager = _render_pager(int(page_size)) if ctx.rows else ""
     groups = [g for g in BOARD_GROUP_ORDER if any(r.get("board_group") == g for r in ctx.rows)]
     board_filter = _render_board_filter(groups)
