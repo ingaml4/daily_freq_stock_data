@@ -246,6 +246,8 @@ def run(store, cfg):
     bars = pd.read_sql_query(f"SELECT {columns} FROM bars WHERE date BETWEEN ? AND ? ORDER BY secid,date", conn, params=(dates[0], end))
     for key in ("secid", "source", "date"):
         bars[key] = bars[key].astype("category")
+    if "unknown" not in bars["source"].cat.categories:
+        bars["source"] = bars["source"].cat.add_categories(["unknown"])
     symbols = store.symbols_df()
     tags = {r[0]: r[1] for r in conn.execute("SELECT secid,MIN(name) FROM symbol_tags WHERE kind='sw' GROUP BY secid")}
     signal_dates = dates[POLICY["warmup_valid_bars"] - 1: -POLICY["primary_horizon"] - 1]
