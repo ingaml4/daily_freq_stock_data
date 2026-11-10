@@ -213,6 +213,7 @@ def _select(frame, name):
 def run(store, cfg):
     from .strategy_rules import strategy_candidates
     from .strategy_execution import simulate_candidate
+    from .readiness import code_version
 
     conn = store.conn
     end = store.latest_signal_date()
@@ -228,7 +229,7 @@ def run(store, cfg):
     signal_dates = dates[POLICY["warmup_valid_bars"] - 1: -POLICY["primary_horizon"] - 1]
     split = int(len(signal_dates) * POLICY["development_fraction"])
     test_dates = signal_dates[min(split + POLICY["embargo_sessions"], len(signal_dates) - 1):]
-    frame = strategy_candidates(bars, symbols, tags, start=signal_dates[0], asof=end)
+    frame = strategy_candidates(bars, symbols, tags, start=signal_dates[0], asof=end, cfg=cfg)
     frame = frame[frame["date"].isin(signal_dates)]
     # 配置、本次输入库版本和每个候选的D日依据一起保留，支持重跑核对。
     arms = {}
@@ -268,7 +269,9 @@ def run(store, cfg):
         if name != "baseline":
             summary[name]["promotion"] = promotion_decision(summary[name]["out_of_sample"], portfolio_spread[name], provenance,
                                                            portfolios[name], portfolios["baseline"], stressed_portfolios[name])
-    report = {"version": VERSION, "generated_at": datetime.now(timezone.utc).isoformat(), "asof": end,
+    report = {"version": VERSION, "source_code_version": code_version(),
+              "policy_sha256": hashlib.sha256(json.dumps(POLICY, sort_keys=True).encode()).hexdigest(),
+              "generated_at": datetime.now(timezone.utc).isoformat(), "asof": end,
               "policy": POLICY, "provenance": provenance,
               "coverage": {"market_sessions": len(dates), "signal_sessions": len(signal_dates),
                            "start": signal_dates[0], "end": signal_dates[-1], "test_start": test_dates[0], "test_end": test_dates[-1],
