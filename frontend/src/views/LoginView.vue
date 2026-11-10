@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { NAlert, NButton, NCheckbox, NInput } from "naive-ui";
 import { safeNext } from "../api";
@@ -9,6 +9,21 @@ const password = ref("");
 const remember = ref(true);
 const busy = ref(false);
 const error = ref("");
+
+onMounted(async () => {
+  try {
+    const response = await fetch("/api/session", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) return;
+    const session = (await response.json()) as { authenticated?: boolean };
+    if (session.authenticated)
+      window.location.replace(safeNext(route.query.next));
+  } catch {
+    // 会话探测失败时，仍允许用户通过表单重新登录。
+  }
+});
 
 async function submit() {
   if (!password.value || busy.value) return;

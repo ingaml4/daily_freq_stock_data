@@ -1,10 +1,28 @@
-import { createRouter, createWebHistory } from "vue-router";
+import { createRouter, createWebHistory, type LocationQuery } from "vue-router";
+
+function signalEntry(to: { query: LocationQuery }) {
+  const query = { ...to.query };
+  const view = typeof query.view === "string" ? query.view : "vol_spike";
+  const valid = [
+    "vol_spike",
+    "macd_golden",
+    "kdj_golden",
+    "boll_break_lower",
+    "reversal",
+    "box_range",
+  ];
+  delete query.view;
+  return {
+    path: `/signals/${valid.includes(view) ? view : "vol_spike"}`,
+    query,
+  };
+}
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: "/", redirect: "/signals/vol_spike" },
-    { path: "/index.html", redirect: "/signals/vol_spike" },
+    { path: "/", redirect: signalEntry },
+    { path: "/index.html", redirect: signalEntry },
     {
       path: "/login",
       component: () => import("./views/LoginView.vue"),
