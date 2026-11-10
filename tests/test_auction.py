@@ -55,6 +55,74 @@ def test_real_shape_time_units_and_conservative_auction_fields():
 
 
 @pytest.mark.parametrize(
+    "when,kind",
+    [
+        ("09:19:00", "virtual_opening"),
+        ("09:22:00", "virtual_opening"),
+        ("09:25:05", "opening_result"),
+        ("14:58:00", "virtual_closing"),
+    ],
+)
+def test_equal_levels_never_prove_auction_mapping(when, kind):
+    payload = {
+        "pb": [10, 0, 0, 0, 0],
+        "ps": [10, 0, 0, 0, 0],
+        "vb": [100, 30, 0, 0, 0],
+        "vs": [100, 0, 0, 0, 0],
+        "t": "2026-11-10 " + when,
+    }
+    result = AuctionBookService(lambda _: payload, clock=lambda: at(when)).snapshot(["SZ300611"])
+    row = result["items"][0]
+    assert result["auction_contract_version"] == row["auction_contract_version"] == "1.1"
+    assert row["auction_kind"] == kind and row["auction_quality"] == "gap"
+    assert row["auction_fields_verified"] is False and row["verified_auction_fields"] == []
+    assert row["raw"]["vb"][1] == 30 and row["raw"]["pb"][1] == 0
+    assert row["source_age_seconds"] == 0
+    for field in row["auction_fields"].values():
+        assert field["value"] is None and field["status"] == "unverified"
+        assert field["evidence"] == field["source_fields"] == []
+    assert row["auction_evidence"]["supplier_mapping_verified"] is False
+    assert row["auction_evidence"]["live_window_verified"] is False
+
+
+@pytest.mark.parametrize(
+    "stamp,reason",
+    [
+        ("2026-11-09 09:22:00", "stale_source_time"),
+        ("2026-11-10 09:20:00", "stale_source_time"),
+        (None, "invalid_source_time"),
+    ],
+)
+def test_auction_field_reason_exposes_missing_or_stale(stamp, reason):
+    row = AuctionBookService(lambda _: quote(stamp), clock=lambda: at("09:22:00")).snapshot(
+        ["300611"]
+    )["items"][0]
+    assert row["auction_reason"] == reason
+    assert all(
+        f["status"] == "unavailable" and f["reason"] == reason
+        for f in row["auction_fields"].values()
+    )
+
+
+def test_auction_upstream_failure_is_not_a_mapping_result():
+    def fail(_):
+        raise ValueError("private")
+
+    row = AuctionBookService(fail, clock=lambda: at("09:22:00")).snapshot(["300969"])["items"][0]
+    assert row["auction_reason"] == "upstream_error"
+    assert row["auction_evidence"]["permission_status"] == "not_proven"
+    assert row["auction_fields"]["matched_volume"]["status"] == "unavailable"
+
+
+def test_outside_auction_never_relabels_continuous_book():
+    row = AuctionBookService(
+        lambda _: quote("2026-11-10 10:00:00"), clock=lambda: at("10:00:00")
+    ).snapshot(["300969"])["items"][0]
+    assert row["book_quality"] == "ok" and row["auction_kind"] == "ordinary_book_or_closed"
+    assert all(f["status"] == "not_applicable" for f in row["auction_fields"].values())
+
+
+@pytest.mark.parametrize(
     "when,phase,active",
     [
         ("09:14:59", "preopen", False),

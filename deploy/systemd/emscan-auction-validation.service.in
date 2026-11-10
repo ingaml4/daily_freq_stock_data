@@ -1,0 +1,13 @@
+[Unit]
+Description=Sample the two authorized A-share auction books locally
+
+[Service]
+Type=oneshot
+WorkingDirectory=__PROJECT_DIR__
+EnvironmentFile=-__ENV_FILE__
+Environment=TZ=Asia/Shanghai
+User=__RUN_USER__
+UMask=0077
+NoNewPrivileges=yes
+ExecStart=__PYTHON_BIN__ -m emscan.auction_validation --expected-date 2026-11-11 --output __PROJECT_DIR__/data/auction-validation/2026-11-11.jsonl --sample-once
+TimeoutStartSec=9s

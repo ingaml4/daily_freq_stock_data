@@ -14,6 +14,14 @@ from . import tzutil
 SHANGHAI = timezone(timedelta(hours=8))
 ENDPOINT = "hsstock.real.five"
 UNIT_SOURCE = "https://www.mairuiapi.com/blog/05-2/"
+AUCTION_CONTRACT_VERSION = "1.1"
+AUCTION_FIELDS = {
+    "indicative_match_price": "CNY/share",
+    "matched_volume": "lot",
+    "matched_amount": "CNY",
+    "unmatched_volume": "lot",
+    "unmatched_direction": "buy/sell/none",
+}
 MAX_SYMBOLS = 10
 ACTIVE = {
     "opening_cancelable",
@@ -148,6 +156,68 @@ def _iso(stamp):
     return stamp.isoformat(timespec="microseconds")
 
 
+def _auction_evidence(item, as_of):
+    """五档权限和时效不能证明竞价语义；各字段独立报告，不从相等盘口猜量。"""
+    phase = item["phase"]
+    reason = item["reason"]
+    if phase in {"opening_cancelable", "opening_locked"}:
+        kind = "virtual_opening"
+    elif phase == "opening_result":
+        kind = "opening_result"
+    elif phase == "closing_auction":
+        kind = "virtual_closing"
+    else:
+        kind = "ordinary_book_or_closed"
+
+    if kind == "ordinary_book_or_closed":
+        status, field_reason = "not_applicable", "outside_auction_window"
+    elif reason and item["book_quality"] == "gap":
+        status, field_reason = "unavailable", reason
+    elif kind == "opening_result":
+        status, field_reason = "unverified", "final_match_mapping_unverified"
+    else:
+        status, field_reason = "unverified", "supplier_auction_mapping_unverified"
+
+    # 这里只记录已经得到官方证明的事实：普通盘口的字段及手数单位。
+    # 交易所原始协议不等于供应商透传承诺；未证实的逐字段值必须为 null。
+    fields = {
+        name: {
+            "value": None,
+            "unit": unit,
+            "status": status,
+            "reason": field_reason,
+            "source_fields": [],
+            "evidence": [],
+        }
+        for name, unit in AUCTION_FIELDS.items()
+    }
+    source_age = None
+    if item.get("source_time"):
+        source_age = (as_of - datetime.fromisoformat(item["source_time"])).total_seconds()
+    return {
+        "auction_contract_version": AUCTION_CONTRACT_VERSION,
+        "auction_kind": kind,
+        "auction_quality": "gap",
+        "auction_fields_verified": False,
+        "verified_auction_fields": [],
+        "auction_fields": fields,
+        "auction_reason": field_reason,
+        "matched_amount": None,
+        "source_age_seconds": source_age,
+        "auction_evidence": {
+            "supplier_mapping_verified": False,
+            "live_window_verified": False,
+            "refresh_interval_seconds": None,
+            "permission_status": (
+                "request_succeeded" if item.get("raw", {}).get("t") else "not_proven"
+            ),
+            "permission_scope": "ordinary_five_level_book_only",
+            "unit_source": UNIT_SOURCE,
+            "upgrade_requires": ["official_supplier_field_mapping", "fresh_live_auction_samples"],
+        },
+    }
+
+
 class CurrentSnapshotService:
     """单次行情快照的交易时段、每股缓存、并发合并及实例用量上限。"""
 
@@ -269,6 +339,14 @@ class AuctionBookService(CurrentSnapshotService):
     """fetch(secid) 返回当前五档。"""
 
     endpoint = ENDPOINT
+
+    def snapshot(self, symbols, *, is_trading_day=None):
+        result = super().snapshot(symbols, is_trading_day=is_trading_day)
+        as_of = datetime.fromisoformat(result["as_of"])
+        for item in result["items"]:
+            item.update(_auction_evidence(item, as_of))
+        result["auction_contract_version"] = AUCTION_CONTRACT_VERSION
+        return result
 
     def _details(self, payload, end, received, phase):
         raw, stamp, quality, book_reason = _book(payload, end, received, phase)

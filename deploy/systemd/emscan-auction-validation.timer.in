@@ -1,0 +1,15 @@
+[Unit]
+Description=Four one-time auction validation samples on 2026-11-11
+
+[Timer]
+OnCalendar=2026-11-11 09:15:05 Asia/Shanghai
+OnCalendar=2026-11-11 09:19:55 Asia/Shanghai
+OnCalendar=2026-11-11 09:20:05 Asia/Shanghai
+OnCalendar=2026-11-11 09:22:05 Asia/Shanghai
+AccuracySec=100ms
+RandomizedDelaySec=0
+Persistent=false
+Unit=emscan-auction-validation.service
+
+[Install]
+WantedBy=timers.target
