@@ -22,7 +22,11 @@ def render(result):
         sample = arm["out_of_sample"]
         book = arm["out_of_sample_portfolio"]
         decision = arm.get("promotion")
-        state = "对照" if decision is None else "通过" if decision["approved"] else "证据不足，未启用"
+        state = (
+            "对照"
+            if decision is None
+            else "通过" if decision["approved"] else "证据不足，未启用"
+        )
         rows.append(
             f"<tr><td>{esc(LABELS[name])}</td><td>{sample['selected']}</td><td>{sample['closed']}</td>"
             f"<td>{sample['signal_dates_with_closed_orders']}</td><td>{pct(sample['mean_net_return'])}</td>"
@@ -32,8 +36,14 @@ def render(result):
     for name, arm in result["arms"].items():
         decision = arm.get("promotion")
         if decision:
-            reasons.append(f"<p>{esc(LABELS[name])} <code>{esc(', '.join(decision['reasons']))}</code></p>")
-    status = "已通过验收" if result["approved_strategies"] else "本轮未批准新规则进入正式选股"
+            reasons.append(
+                f"<p>{esc(LABELS[name])} <code>{esc(', '.join(decision['reasons']))}</code></p>"
+            )
+    status = (
+        "已通过验收"
+        if result["approved_strategies"]
+        else "本轮未批准新规则进入正式选股"
+    )
     return f"""<!doctype html><html lang="zh-CN"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>短期策略回测比较</title>
 <style>body{{max-width:1280px;margin:24px auto;padding:0 18px;background:#0f1115;color:#e8ecf3;font:15px/1.7 system-ui}}
