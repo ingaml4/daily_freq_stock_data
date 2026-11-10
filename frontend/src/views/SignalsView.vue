@@ -45,6 +45,10 @@ interface SignalData {
   stale_reason: string;
   cache_written: string;
   update_note: string;
+  columns?: string[];
+  title?: string;
+  error?: string;
+  limit?: number;
 }
 interface ViewInfo {
   key: string;
@@ -137,25 +141,29 @@ const fieldNames: Record<string, string> = {
   ma60: "MA60",
   signals_cn: "命中信号",
 };
-const defaultFields = computed(() => [
-  "industry",
-  "board",
-  "close",
-  "pct_chg",
-  "amount_yi",
-  "turnover",
-  ...(viewFields[activeView.value] || []),
-]);
-const availableFields = computed(() => [
-  ...new Set([
-    ...defaultFields.value,
-    "ma5",
-    "ma10",
-    "ma20",
-    "ma60",
-    "signals_cn",
-  ]),
-]);
+const defaultFields = computed(() => {
+  const columns = data.value?.columns;
+  if (columns?.length)
+    return columns.filter((key) => !["code", "name"].includes(key));
+  return [
+    "industry",
+    "board",
+    "close",
+    "pct_chg",
+    "amount_yi",
+    "turnover",
+    ...(viewFields[activeView.value] || []),
+  ];
+});
+const availableFields = computed(() => {
+  const exposed = new Set(
+    (data.value?.rows || []).flatMap((row) => Object.keys(row)),
+  );
+  const optional = ["ma5", "ma10", "ma20", "ma60", "signals_cn"].filter((key) =>
+    exposed.has(key),
+  );
+  return [...new Set([...defaultFields.value, ...optional])];
+});
 const visibleFields = computed(
   () => customColumns.value || defaultFields.value,
 );
@@ -272,6 +280,7 @@ async function load() {
       { view: activeView.value, q: String(route.query.q || ""), limit: "300" },
       current.signal,
     );
+    if (data.value.error) error.value = data.value.error;
     page.value = 1;
   } catch (e) {
     if (!current.signal.aborted) error.value = message(e);
@@ -327,7 +336,7 @@ onBeforeUnmount(() => controller?.abort());
     >
   </div>
   <n-alert
-    v-if="data?.stale"
+    v-if="!loading && data?.stale"
     type="warning"
     :show-icon="false"
     class="section"
@@ -366,7 +375,7 @@ onBeforeUnmount(() => controller?.abort());
         /></n-checkbox-group>
       </n-popover>
     </div>
-    <div v-if="data" class="signal-meta data-note">
+    <div v-if="!loading && data" class="signal-meta data-note">
       <span
         ><strong class="tabular">{{ data.date || "—" }}</strong> 收盘数据</span
       ><span
