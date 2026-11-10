@@ -605,4 +605,27 @@ onBeforeUnmount(() => controller?.abort());
     margin-top: 18px;
   }
 }
+@media (max-width: 560px) {
+  .signal-navigation {
+    display: block;
+  }
+  .signal-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+  .signal-tabs a {
+    min-width: 0;
+    padding: 9px 4px;
+    font-size: 12px;
+    text-align: center;
+  }
+  .rule-help-trigger {
+    display: flex;
+    width: fit-content;
+    margin: 9px 0 0 auto;
+  }
+}
 </style>
