@@ -1,3 +1,11 @@
+FROM node:24-slim AS ui-build
+WORKDIR /build
+RUN npm install --global pnpm@11.25.0
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./frontend/
+RUN pnpm --dir frontend install --frozen-lockfile
+COPY frontend/ ./frontend/
+RUN pnpm --dir frontend build
+
 FROM python:3.11-slim
 
 ENV TZ=Asia/Shanghai \
@@ -18,6 +26,7 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY emscan ./emscan
+COPY --from=ui-build /build/frontend/dist ./frontend/dist
 # config.yaml 是可选的：全部配置都有默认值，licence 走 MAIRUI_LICENCE 即可
 COPY config.yaml* ./
 
