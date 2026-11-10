@@ -1,6 +1,7 @@
 """展示已经完成的离线策略比较。请求不会触发回测或行情请求。"""
 
 import html
+from datetime import datetime, timedelta, timezone
 
 
 LABELS = {
@@ -17,6 +18,7 @@ def render(result):
 
     esc = lambda value: html.escape(str(value))
     coverage = result["coverage"]
+    generated = datetime.fromisoformat(result["generated_at"]).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
     rows = []
     for name, arm in result["arms"].items():
         sample = arm["out_of_sample"]
@@ -62,4 +64,4 @@ a{{color:#76baff}}table{{border-collapse:collapse;width:100%;white-space:nowrap}
 按连续五个市场日分块重采样并校正三组比较，净收益改善区间下界须为正，同时通过组合回撤与双倍滑点测试。</p>
 <p><a href="/api/strategy-review">完整报告 JSON</a> · <a href="/api/strategy-review/orders">逐笔信号与成交依据 JSON</a></p>
 <details><summary>各方案未通过的条件</summary>{''.join(reasons)}</details>
-<p>回测版本 {esc(result['version'])}，生成时间 {esc(result['generated_at'])}。</p></html>"""
+<p>回测版本 {esc(result['version'])}，生成时间（北京时间） {esc(generated)}。</p></html>"""
