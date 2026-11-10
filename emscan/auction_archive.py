@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import sqlite3
 import time
 from contextlib import closing
@@ -35,6 +36,8 @@ def record_frames(path, items):
     if not rows:
         return "no_upstream_frame"
     try:
+        # 盘口是公开行情，但请求过的证券组合属于用户的观察记录。
+        os.close(os.open(path, os.O_RDWR | os.O_CREAT, 0o600))
         with closing(sqlite3.connect(path, timeout=2)) as conn, conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS auction_frames("
@@ -42,7 +45,7 @@ def record_frames(path, items):
                 "frame_json TEXT NOT NULL, PRIMARY KEY(symbol,received_at,endpoint))"
             )
             conn.executemany("INSERT OR IGNORE INTO auction_frames VALUES (?,?,?,?)", rows)
-    except sqlite3.Error:
+    except (sqlite3.Error, OSError):
         log.error("盘口留存失败")
         return "unavailable"
     return "stored"
