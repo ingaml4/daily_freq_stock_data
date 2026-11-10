@@ -26,7 +26,7 @@ def render(result):
         rows.append(
             f"<tr><td>{esc(LABELS[name])}</td><td>{sample['selected']}</td><td>{sample['closed']}</td>"
             f"<td>{sample['signal_dates_with_closed_orders']}</td><td>{pct(sample['mean_net_return'])}</td>"
-            f"<td>{pct(book['net_return'])}</td><td>{pct(book['max_drawdown'])}</td><td>{state}</td></tr>"
+            f"<td>{pct(book['net_return']) if book['valid_for_comparison'] else '无法验证'}</td><td>{pct(book['max_drawdown']) if book['valid_for_comparison'] else '无法验证'}</td><td>{state}</td></tr>"
         )
     reasons = []
     for name, arm in result["arms"].items():
@@ -47,7 +47,7 @@ a{{color:#76baff}}table{{border-collapse:collapse;width:100%;white-space:nowrap}
 <div class="wrap"><table><thead><tr><th>方案</th><th>入选次数</th><th>完成买卖</th><th>有完成样本的信号日</th>
 <th>单笔平均净收益</th><th>样本外资金收益</th><th>组合最大回撤</th><th>验收</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>
 <p>当前行业标签与股票状态缺少历史快照；更早价格包含复权历史，可靠成交快照区间较短。
-金额与回撤来自本轮受限数据回放，缺失成交、估值与价格基础限制均保留在报告。历史信号是规则重建，未写成当时发布的AI名单。</p>
+金额与回撤来自本轮受限数据回放，缺失成交、估值与价格基础限制均保留在报告。历史信号是规则重建，未写成当时发布的AI名单。价格形成窗口包含混合来源时，完成的成交仅供条件性对照。估值或成交数据不完整的组合显示“无法验证”，明细仍保存回放轨迹。</p>
 <p>预先固定的上线门槛包括至少60个有完成买卖的样本外信号日、100笔成交、90%可核验覆盖；
 按连续五个市场日分块重采样并校正三组比较，净收益改善区间下界须为正，同时通过组合回撤与双倍滑点测试。</p>
 <p><a href="/api/strategy-review">完整报告 JSON</a> · <a href="/api/strategy-review/orders">逐笔信号与成交依据 JSON</a></p>

@@ -11,15 +11,22 @@ from emscan.web import serve
 def test_promotion_requires_execution_dates_provenance_and_portfolio():
     sample = dict(signal_dates_with_closed_orders=60, closed=100, execution_coverage=0.95)
     comparison = {"simultaneous_95pct_interval": [0.001, 0.003]}
-    sources = dict(point_in_time_universe=True, point_in_time_industries=True)
-    baseline = dict(valuation_complete=True, max_drawdown=-0.1, net_return=0.03)
-    improved = dict(valuation_complete=True, max_drawdown=-0.09, net_return=0.04)
-    assert promotion_decision(sample, comparison, sources, improved, baseline, {"net_return": 0.02})["approved"]
+    sources = dict(point_in_time_universe=True, point_in_time_industries=True, comparable_indicator_price_history=True)
+    baseline = dict(valid_for_comparison=True, valuation_complete=True, max_drawdown=-0.1, net_return=0.03)
+    improved = dict(valid_for_comparison=True, valuation_complete=True, max_drawdown=-0.09, net_return=0.04)
+    assert promotion_decision(sample, comparison, sources, improved, baseline, {"net_return": 0.02, "valid_for_comparison": True}, sample, {"net_return": 0.01, "valid_for_comparison": True})["approved"]
     missing = promotion_decision({**sample, "signal_dates_with_closed_orders": 10}, comparison,
-                                 {**sources, "point_in_time_industries": False}, improved, baseline, {"net_return": 0.02})
+                                 {**sources, "point_in_time_industries": False}, improved, baseline, {"net_return": 0.02, "valid_for_comparison": True}, sample, {"net_return": 0.01, "valid_for_comparison": True})
     assert not missing["approved"]
     assert "historical_industry_membership_unverified" in missing["reasons"]
     assert "insufficient_out_of_sample_dates" in missing["reasons"]
+    invalid = promotion_decision(sample, {"simultaneous_95pct_interval": [float("nan"), 0.01]},
+                                 sources, improved, baseline, {"net_return": 0.02, "valid_for_comparison": True},
+                                 {**sample, "execution_coverage": float("nan")},
+                                 {"net_return": 0.01, "valid_for_comparison": True})
+    assert not invalid["approved"]
+    assert "net_improvement_not_established" in invalid["reasons"]
+    assert "baseline_evidence_insufficient" in invalid["reasons"]
 
 
 def test_shared_cash_cannot_spend_close_sale_at_same_day_open():

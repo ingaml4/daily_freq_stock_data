@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -86,7 +87,9 @@ def _daily_spread(arms, start, end, market_dates):
             sample = np.nanmean(sampled, axis=1)
             # 三个候选方案同时比较，使用 Bonferroni 调整的双侧区间。
             tail = 0.05 / (2 * (len(ARMS) - 1))
-            interval = [float(x) for x in np.quantile(sample, [tail, 1 - tail])]
+            sample = sample[np.isfinite(sample)]
+            if len(sample) >= POLICY["bootstrap_repetitions"] * 0.95:
+                interval = [float(x) for x in np.quantile(sample, [tail, 1 - tail])]
         result[name] = {"common_signal_dates": len(dates), "mean_daily_difference": float(deltas.mean()) if len(deltas) else None,
                         "simultaneous_95pct_interval": interval, "unit": "decimal_return",
                         "limitation": "conditional_on_comparable_closed_orders", "block_sessions": POLICY["bootstrap_block_sessions"]}
@@ -133,7 +136,8 @@ def portfolio(orders, prices, days, start, capital=800000.0):
         value = cash
         for sid, order in holdings.items():
             bar = prices[sid].get(day) or {}
-            if bar.get("source") != "spot" or not bar.get("close") or order["status"] == "unavailable":
+            valid_price = isinstance(bar.get("close"), (float, int)) and math.isfinite(bar["close"]) and bar["close"] > 0
+            if bar.get("source") != "spot" or not valid_price or order["status"] == "unavailable":
                 complete = False
                 blocked["unverified_valuation_days"] += 1
             mark = bar.get("close") if bar.get("close", 0) > 0 else order["buy"]["price"]
@@ -141,9 +145,12 @@ def portfolio(orders, prices, days, start, capital=800000.0):
         nav.append({"date": day, "equity": round(value, 2), "cash": round(cash, 2), "holdings": len(holdings)})
     equity = np.array([capital] + [n["equity"] for n in nav])
     drawdowns = equity / np.maximum.accumulate(equity) - 1
+    execution_complete = all(o["status"] != "unavailable" for o in orders if o["date"] >= start)
     return {"initial_capital": capital, "order_budget": 100000.0, "max_positions": 8,
             "net_return": float(equity[-1] / capital - 1), "max_drawdown": float(drawdowns.min()),
-            "valuation_complete": complete, "completed_trades": len(closed), "open_positions": len(holdings),
+            "valuation_complete": complete, "execution_data_complete": execution_complete,
+            "valid_for_comparison": complete and execution_complete,
+            "completed_trades": len(closed), "open_positions": len(holdings),
             "blocked": dict(blocked), "daily_equity": nav, "valuation_basis": "close_mark_open_inventory_not_liquidated"}
 
 
@@ -173,29 +180,37 @@ def _portfolio_differences(portfolios):
     return output
 
 
-def promotion_decision(stats, differences, provenance, portfolio=None, baseline_portfolio=None, stress=None):
+def promotion_decision(stats, differences, provenance, portfolio=None, baseline_portfolio=None, stress=None,
+                       baseline_stats=None, baseline_stress=None):
     """验收条件预先固定，缺证据或未证实改善时保持未批准。"""
     reasons = []
     if not provenance["point_in_time_universe"]:
         reasons.append("historical_universe_and_status_unverified")
     if not provenance["point_in_time_industries"]:
         reasons.append("historical_industry_membership_unverified")
+    if not provenance.get("comparable_indicator_price_history"):
+        reasons.append("indicator_price_basis_unverified")
     if stats["signal_dates_with_closed_orders"] < POLICY["minimum_test_dates"]:
         reasons.append("insufficient_out_of_sample_dates")
     if stats["closed"] < POLICY["minimum_closed_orders"]:
         reasons.append("insufficient_closed_orders")
     if (stats["execution_coverage"] or 0) < POLICY["minimum_execution_coverage"]:
         reasons.append("insufficient_execution_coverage")
+    if not math.isfinite(stats.get("execution_coverage") or 0):
+        reasons.append("invalid_execution_coverage")
     interval = differences.get("simultaneous_95pct_interval")
-    if not interval or interval[0] <= POLICY["minimum_improvement_ci"]:
+    if not interval or not all(math.isfinite(v) for v in interval) or interval[0] <= POLICY["minimum_improvement_ci"]:
         reasons.append("net_improvement_not_established")
-    if not portfolio or not baseline_portfolio or not portfolio["valuation_complete"] or not baseline_portfolio["valuation_complete"]:
+    if not baseline_stats or baseline_stats["signal_dates_with_closed_orders"] < POLICY["minimum_test_dates"] or baseline_stats["closed"] < POLICY["minimum_closed_orders"] or not math.isfinite(baseline_stats["execution_coverage"] or 0) or (baseline_stats["execution_coverage"] or 0) < POLICY["minimum_execution_coverage"]:
+        reasons.append("baseline_evidence_insufficient")
+    valid_portfolios = all(p and p.get("valid_for_comparison") and all(math.isfinite(p[k]) for k in ("max_drawdown", "net_return")) for p in (portfolio, baseline_portfolio))
+    if not valid_portfolios:
         reasons.append("portfolio_drawdown_validation_pending")
     elif portfolio["max_drawdown"] < baseline_portfolio["max_drawdown"] - 0.02:
         reasons.append("portfolio_drawdown_deteriorated")
     elif portfolio["net_return"] <= baseline_portfolio["net_return"]:
         reasons.append("portfolio_net_return_not_improved")
-    if not stress or stress.get("net_return", -1) <= 0:
+    if not stress or not baseline_stress or not stress.get("valid_for_comparison") or not baseline_stress.get("valid_for_comparison") or not all(math.isfinite(p.get("net_return", float("nan"))) for p in (stress, baseline_stress)) or stress["net_return"] <= max(0, baseline_stress["net_return"]):
         reasons.append("double_slippage_stress_not_passed")
     return {"approved": not reasons, "reasons": reasons}
 
@@ -239,9 +254,10 @@ def run(store, cfg):
     if not end:
         raise ValueError("缺少已完成的每日信号日期")
     # 较早稀疏回补不作为全市场历史。预热和判定只使用当日及此前行情。
-    dates = [r[0] for r in conn.execute("SELECT date FROM bars WHERE date<=? AND volume>0 AND close>0 GROUP BY date HAVING COUNT(*)>=5000 ORDER BY date", (end,))]
-    if len(dates) <= POLICY["warmup_valid_bars"] + 2 * POLICY["primary_horizon"]:
+    covered_dates = [r[0] for r in conn.execute("SELECT date FROM bars WHERE date<=? AND volume>0 AND close>0 GROUP BY date HAVING COUNT(*)>=5000 ORDER BY date", (end,))]
+    if len(covered_dates) <= POLICY["warmup_valid_bars"] + 2 * POLICY["primary_horizon"]:
         raise ValueError("完整市场历史不足以分割回测")
+    dates = [d for d in store.all_trading_days() if covered_dates[0] <= d <= end]
     columns = "secid,date,open,high,low,close,volume,amount,pct_chg,chg,source,turnover,float_mv,volume_ratio"
     bars = pd.read_sql_query(f"SELECT {columns} FROM bars WHERE date BETWEEN ? AND ? ORDER BY secid,date", conn, params=(dates[0], end))
     for key in ("secid", "source", "date"):
@@ -250,9 +266,14 @@ def run(store, cfg):
         bars["source"] = bars["source"].cat.add_categories(["unknown"])
     symbols = store.symbols_df()
     tags = {r[0]: r[1] for r in conn.execute("SELECT secid,MIN(name) FROM symbol_tags WHERE kind='sw' GROUP BY secid")}
-    signal_dates = dates[POLICY["warmup_valid_bars"] - 1: -POLICY["primary_horizon"] - 1]
+    day_index = {d: i for i, d in enumerate(dates)}
+    signal_dates = [d for d in covered_dates[POLICY["warmup_valid_bars"] - 1:]
+                    if day_index[d] + POLICY["primary_horizon"] + 1 < len(dates)]
     split = int(len(signal_dates) * POLICY["development_fraction"])
-    test_dates = signal_dates[min(split + POLICY["embargo_sessions"], len(signal_dates) - 1):]
+    test_boundary = day_index[signal_dates[split]] + POLICY["embargo_sessions"]
+    test_dates = [d for d in signal_dates if day_index[d] >= test_boundary]
+    if not test_dates:
+        raise ValueError("隔离训练边界后没有样本外信号日")
     frame = strategy_candidates(bars, symbols, tags, start=signal_dates[0], asof=end, cfg=cfg)
     frame = frame[frame["date"].isin(signal_dates)]
     # 配置、本次输入库版本和每个候选的D日依据一起保留，支持重跑核对。
@@ -284,6 +305,7 @@ def run(store, cfg):
         arms[name] = orders
         stress_arms[name] = stressed
     provenance = {"point_in_time_universe": False, "point_in_time_industries": False,
+                  "comparable_indicator_price_history": False,
                   "price_basis": "stored_qfq_history_plus_unadjusted_spot", "data_version": store.data_version(),
                   "sector_tags_asof": store.get_meta("symbol_tags_updated"),
                   "signal_provenance": "historical_rule_reconstruction"}
@@ -298,7 +320,8 @@ def run(store, cfg):
                          "out_of_sample_portfolio": portfolios[name], "double_slippage_portfolio": stressed_portfolios[name]}
         if name != "baseline":
             summary[name]["promotion"] = promotion_decision(summary[name]["out_of_sample"], portfolio_spread[name], provenance,
-                                                           portfolios[name], portfolios["baseline"], stressed_portfolios[name])
+                                                           portfolios[name], portfolios["baseline"], stressed_portfolios[name],
+                                                           _statistics([r for r in arms["baseline"] if r["date"] in test_dates]), stressed_portfolios["baseline"])
     report = {"version": VERSION, "source_code_version": code_version(),
               "policy_sha256": hashlib.sha256(json.dumps(POLICY, sort_keys=True).encode()).hexdigest(),
               "generated_at": datetime.now(timezone.utc).isoformat(), "asof": end,
