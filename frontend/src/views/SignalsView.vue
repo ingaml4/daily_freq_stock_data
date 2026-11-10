@@ -47,6 +47,7 @@ interface SignalData {
   update_note: string;
   columns?: string[];
   title?: string;
+  help?: string;
   error?: string;
   limit?: number;
 }
@@ -362,15 +363,36 @@ onBeforeUnmount(() => controller?.abort());
     </div>
     <n-button secondary :loading="loading" @click="load">刷新数据</n-button>
   </div>
-  <div class="signal-tabs" aria-label="信号类型">
-    <router-link
-      v-for="view in viewOptions"
-      :key="view.key"
-      :to="`/signals/${view.key}`"
-      :class="{ active: activeView === view.key }"
-      >{{ view.nav }}</router-link
+  <div class="signal-navigation">
+    <div class="signal-tabs" aria-label="信号类型">
+      <router-link
+        v-for="view in viewOptions"
+        :key="view.key"
+        :to="`/signals/${view.key}`"
+        :class="{ active: activeView === view.key }"
+        >{{ view.nav }}</router-link
+      >
+    </div>
+    <n-popover
+      v-if="!loading && data?.help"
+      trigger="click"
+      placement="bottom-end"
+      :show-arrow="false"
     >
+      <template #trigger
+        ><n-button quaternary size="small" class="rule-help-trigger"
+          >筛选口径</n-button
+        ></template
+      >
+      <div class="rule-help-copy">{{ data.help }}</div>
+    </n-popover>
   </div>
+  <p
+    v-if="!loading && activeView === 'box_range' && data?.title"
+    class="data-note signal-rule-title"
+  >
+    {{ data.title }}
+  </p>
   <n-alert
     v-if="!loading && data?.stale"
     type="warning"
@@ -457,13 +479,34 @@ onBeforeUnmount(() => controller?.abort());
 </template>
 
 <style scoped>
+.signal-navigation {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 24px 0 18px;
+}
+.rule-help-trigger {
+  flex: 0 0 auto;
+}
+.rule-help-copy {
+  width: min(440px, calc(100vw - 64px));
+  max-height: min(60vh, 480px);
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.signal-rule-title {
+  margin: -4px 0 18px;
+}
 .signal-tabs {
   scrollbar-width: none;
   -ms-overflow-style: none;
   display: flex;
   gap: 6px;
   overflow-x: auto;
-  margin: 24px 0 18px;
+  flex: 1;
+  min-width: 0;
   padding-bottom: 3px;
 }
 .signal-tabs::-webkit-scrollbar {
@@ -558,7 +601,7 @@ onBeforeUnmount(() => controller?.abort());
   .table-footer {
     padding: 14px;
   }
-  .signal-tabs {
+  .signal-navigation {
     margin-top: 18px;
   }
 }
