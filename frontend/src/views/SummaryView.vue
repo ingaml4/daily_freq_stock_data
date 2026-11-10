@@ -43,6 +43,9 @@ const selectedDate = computed(() =>
     : data.value?.date || null,
 );
 const isFallback = computed(() => !!data.value?.engine?.startsWith("rule"));
+const hasLegacyBoxRule = computed(() =>
+  /箱体做\s*T|箱体震荡/i.test(data.value?.content || ""),
+);
 const coverageLabel = computed(
   () =>
     ({ ready: "数据完整", waiting: "正在生成", degraded: "部分依据待补充" })[
@@ -132,6 +135,14 @@ onBeforeUnmount(() => controller?.abort());
         }}</a
         ><span class="data-note">发布于 {{ localTime(data?.created_at) }}</span>
       </div>
+      <n-alert
+        v-if="hasLegacyBoxRule"
+        type="info"
+        :show-icon="false"
+        class="legacy-rule-note"
+      >
+        本文按发布时的箱体区间规则生成；当前信号页已改为放量突破箱体上沿。
+      </n-alert>
       <article class="report-prose" v-html="html" />
       <footer class="summary-foot data-note">
         内容保留原始发布版本 · {{ data?.engine || "来源未记录" }} · 北京时间
@@ -175,6 +186,9 @@ onBeforeUnmount(() => controller?.abort());
   border-top: 1px solid var(--color-border);
   padding-top: 20px;
   margin-top: 28px;
+}
+.legacy-rule-note {
+  margin-bottom: 22px;
 }
 .report-prose {
   max-width: 1020px;
