@@ -223,7 +223,10 @@ def run(store, cfg):
     dates = [r[0] for r in conn.execute("SELECT date FROM bars WHERE date<=? AND volume>0 AND close>0 GROUP BY date HAVING COUNT(*)>=5000 ORDER BY date", (end,))]
     if len(dates) <= POLICY["warmup_valid_bars"] + 2 * POLICY["primary_horizon"]:
         raise ValueError("完整市场历史不足以分割回测")
-    bars = pd.read_sql_query("SELECT * FROM bars WHERE date BETWEEN ? AND ? ORDER BY secid,date", conn, params=(dates[0], end))
+    columns = "secid,date,open,high,low,close,volume,amount,pct_chg,chg,source,turnover,float_mv,volume_ratio"
+    bars = pd.read_sql_query(f"SELECT {columns} FROM bars WHERE date BETWEEN ? AND ? ORDER BY secid,date", conn, params=(dates[0], end))
+    for key in ("secid", "source", "date"):
+        bars[key] = bars[key].astype("category")
     symbols = store.symbols_df()
     tags = {r[0]: r[1] for r in conn.execute("SELECT secid,MIN(name) FROM symbol_tags WHERE kind='sw' GROUP BY secid")}
     signal_dates = dates[POLICY["warmup_valid_bars"] - 1: -POLICY["primary_horizon"] - 1]
@@ -236,14 +239,20 @@ def run(store, cfg):
     stress_arms = {}
     opts = settings(cfg)
     stress_opts = {**opts, "slippage_bps": opts["slippage_bps"] * 2}
-    grouped = {sid: {r["date"]: r for r in group.to_dict("records")} for sid, group in bars.groupby("secid", sort=False)}
+    series_columns = ["secid", "date", "open", "high", "low", "close", "volume", "source", "pct_chg", "chg"]
+    first_seen = bars.groupby("secid", observed=True)["date"].agg(lambda x: str(x.iloc[0])).to_dict()
+    needed = set(frame["secid"])
+    recent = bars[bars["secid"].isin(needed) & bars["date"].astype(str).ge(dates[POLICY["warmup_valid_bars"] - 7])]
+    grouped = {sid: {str(r["date"]): r for r in group.to_dict("records")} for sid, group in recent[series_columns].groupby("secid", sort=False, observed=True)}
+    del bars, recent
     name_by_sid = dict(zip(symbols["secid"], symbols["name"]))
     for name in ARMS:
         orders = []
         stressed = []
         for row in _select(frame, name).to_dict("records"):
             row = {k: v if pd.notna(v) else None for k, v in row.items()}
-            row.update(name=name_by_sid.get(row["secid"], ""), point_in_time=True, is_baseline=name == "baseline")
+            row.update(name=name_by_sid.get(row["secid"], ""), first_seen=first_seen[row["secid"]],
+                       point_in_time=True, is_baseline=name == "baseline")
             outcome = simulate_candidate(row, dates, grouped[row["secid"]], opts=opts,
                                          exit_policy=ARMS[name][2], time_exit=POLICY["primary_horizon"])
             orders.append({**outcome, "date": row["date"], "secid": row["secid"], "strategy": row["strategy"],
