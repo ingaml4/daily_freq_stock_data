@@ -610,7 +610,7 @@ def cmd_box(cfg: Config, args: argparse.Namespace) -> int:
             prefix="box",
             sheet_name="箱体放量突破",
         )
-        store.record_run("box", trade_date=trade_date, scanned=len(features), hits=0)
+        store.record_run("box", trade_date=trade_date, scanned=len(features), hits=0, params={"rule_version": "volume_breakout_v1"})
         store.close()
         return 0
     hits["amount_yi"] = hits["amount"] / 1e8
@@ -636,7 +636,7 @@ def cmd_box(cfg: Config, args: argparse.Namespace) -> int:
     files = write_files(_BoxResult(trade_date, hits), cfg, prefix="box", sheet_name="箱体放量突破")
     for path in files:
         log.info("报告已写出：%s", path)
-    store.record_run("box", trade_date=trade_date, scanned=None, hits=len(hits))
+    store.record_run("box", trade_date=trade_date, scanned=None, hits=len(hits), params={"rule_version": "volume_breakout_v1"})
     store.close()
     return 0
 
@@ -658,6 +658,8 @@ BOX_REPORT_COLUMNS = (
     "pct_chg",
     "amount_yi",
     "box_breakout_pct",
+    "vol_ratio_5",
+    "vol_ratio_20",
     "box_pos",
     "box_width",
     "box_high",

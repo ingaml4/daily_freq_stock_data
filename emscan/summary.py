@@ -55,7 +55,7 @@ VIEW_METRICS = {
     "s_macd_golden": ("macd_diff", "DIFF"),
     "s_kdj_golden": ("kdj_j", "J"),
     "s_boll_break_lower": ("boll_pos", "布林位置"),
-    "s_box_range": ("box_breakout_pct", "突破幅度"),
+    "s_box_range": ("box_breakout_pct", "突破幅度比"),
     "s_reversal": ("rev_signals", "证据"),
 }
 

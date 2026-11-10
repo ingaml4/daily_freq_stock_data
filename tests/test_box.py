@@ -212,3 +212,16 @@ def test_old_cache_rows_keep_their_original_version_and_are_not_new_hits(tmp_pat
     assert row["signals"] == "box_range_legacy"
     assert store.load_daily_signals(only=["s_box_range"]).empty
     store.close()
+
+
+
+def test_v13_migration_preserves_legacy_box_values_without_market_rows(tmp_path):
+    cfg = make_cfg(tmp_path)
+    with open_store(cfg) as st:
+        st.upsert_daily_signals([dict(secid="1.600001", date="2026-11-09", s_box_range=1, box_high=12.3)])
+        st.conn.execute("PRAGMA user_version=13")
+        st.conn.commit()
+    with open_store(cfg) as st:
+        row = st.conn.execute("SELECT s_box_range,box_high,box_rule_version FROM daily_signals").fetchone()
+        assert tuple(row) == (1, 12.3, None)
+        assert st.conn.execute("PRAGMA user_version").fetchone()[0] == 14

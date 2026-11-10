@@ -511,7 +511,9 @@ class Store:
                 kind = "TEXT"
             log.info("行情库升级：daily_signals 表新增列 %s", column)
             self.conn.execute(f"ALTER TABLE daily_signals ADD COLUMN {column} {kind}")
-        self.prune_inactive_signals()
+        # v14仅补箱体规则字段，不重写旧日缓存。
+        if self._schema_version() < 13:
+            self.prune_inactive_signals()
         # 视图要跟着新列走：VIEW 是 SELECT *，但 signals 文本列要重新拼
         self.conn.execute("DROP VIEW IF EXISTS daily_signals_named")
         self.conn.execute(DAILY_SIGNALS_VIEW)
@@ -918,7 +920,9 @@ class Store:
                 "(COALESCE(d.s_box_range,0)=1 AND d.box_rule_version='volume_breakout_v1')"
                 if flag == "s_box_range" else f"COALESCE(d.{flag}, 0)=1" for flag in any_of) + ")"
         if min_count and min_count > 0:
-            total = " + ".join(f"COALESCE(d.{flag}, 0)" for flag in SIGNAL_FLAGS)
+            total = " + ".join(
+                "CASE WHEN d.box_rule_version='volume_breakout_v1' THEN COALESCE(d.s_box_range,0) ELSE 0 END"
+                if flag == "s_box_range" else f"COALESCE(d.{flag},0)" for flag in SIGNAL_FLAGS)
             sql += f" AND ({total}) >= ?"
             params.append(int(min_count))
         sql += " ORDER BY d.date DESC, d.secid"
@@ -1228,7 +1232,7 @@ class Store:
             " SUM(COALESCE(s_kdj_golden, 0)) AS kdj_golden, "
             " SUM(COALESCE(s_boll_break_lower, 0)) AS boll_break_lower, "
             " SUM(COALESCE(s_boll_lower, 0)) AS boll_lower, "
-            " SUM(COALESCE(s_box_range, 0)) AS box_range, "
+            " SUM(CASE WHEN box_rule_version='volume_breakout_v1' THEN COALESCE(s_box_range,0) ELSE 0 END) AS box_range, "
             " SUM(COALESCE(s_reversal, 0)) AS reversal, "
             " MAX(computed_at) AS last_write "
             "FROM daily_signals WHERE date = ?",
