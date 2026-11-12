@@ -2162,6 +2162,53 @@ def make_handler(
                 self._send(body, ctype=ctype)
                 return
 
+            if path == "/api/sector-snapshot":
+                from .sector_snapshot import build_sector_snapshot_payload
+
+                if not password:
+                    self._send(b'{"error":"sector_snapshot_unavailable"}', 503, "application/json")
+                    return
+                if parsed.query:
+                    self._send(b'{"error":"live cached snapshot; no query parameters"}', 400, "application/json")
+                    return
+                with store_factory() as st:
+                    snapshot = st.path.parent / "sector-snapshot.json"
+                try:
+                    result = build_sector_snapshot_payload(snapshot)
+                    status = 200
+                except (OSError, ValueError):
+                    result, status = {"status": "waiting", "error": "sector_snapshot_unavailable"}, 503
+                self._send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8"),
+                           status, "application/json; charset=utf-8")
+                return
+
+            if path in ("/api/personal-opportunities", "/api/data-quality"):
+                from .data_quality import turnover_quality
+                from .opportunity_archive import report as opportunity_report
+
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                dates = query.get("date")
+                day = dates[0] if dates and len(dates) == 1 else None
+                if not password:
+                    self._send(b'{"error":"personal_data_unavailable"}', 503, "application/json")
+                    return
+                if set(query) - {"date"} or ("date" in query and not day):
+                    self._send(b'{"error":"expected one date in YYYY-MM-DD"}', 400, "application/json")
+                    return
+                try:
+                    if day and dt.date.fromisoformat(day).isoformat() != day:
+                        raise ValueError()
+                except ValueError:
+                    self._send(b'{"error":"date must be YYYY-MM-DD"}', 400, "application/json")
+                    return
+                with store_factory() as st:
+                    day = day or st.latest_date() or tz_today()
+                    result = (turnover_quality(st.conn, day) if path.endswith("data-quality")
+                              else opportunity_report(st, day))
+                self._send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8"),
+                           ctype="application/json; charset=utf-8")
+                return
+
             if path == "/api/market-mainline":
                 from .market_mainline import report
 

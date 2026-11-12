@@ -64,6 +64,8 @@ INDUSTRY_TOP = "行业分布"
 PROMPT = """你是 A 股复盘分析师。下面是程序在 {date} 收盘后扫描出的结构化结果（来自本地行情库，
 只包含信号命中的个股，**是全量、没有抽样**；每个按钮附带筛选口径和整体统计，请严格按口径理解数据，
 不要自行脑补定义。命中多的时候不要只盯前几只，比例、分布、集中度都自己算。
+先核对数据质量。换手未知包括正成交但换手为零的可疑占位，不能解释为低换手。
+若换手待核，放量和箱体命中数只是已确认下限，不能由少命中或零命中推断市场无量、无主线。
 
 请基于**这些数据**写一份中文复盘，Markdown 格式，**1500~3000 字**，宁长勿短、信息密度要高，
 不要写"整体中性、注意风险"这类空话。按下面的结构写：
@@ -80,12 +82,12 @@ PROMPT = """你是 A 股复盘分析师。下面是程序在 {date} 收盘后扫
 的行业只数）：找出扎堆最明显的 3~5 个行业，算清它们在各自按钮里的占比，并回答"这是一两个行业的
 集体异动，还是全市场普跌/普涨背景下的分散信号"；如果同一行业的命中票扎堆且涨幅一致，要点明这更像
 消息面驱动的板块行情（但**不要编造具体新闻、政策、公告**，只描述数据特征并提示"需自行核实消息面"）；
-若某按钮命中虽然多、但行业极度分散，也要明确指出这说明没有主线。
+某按钮命中分散只描述该筛选结果；市场主线需独立的全成员广度、量价和连续性证据。
 如果数据里确实没有行业字段（未同步行业归属），就明确写"行业维度数据未提供"，**不要编造行业、
 题材、赛道归属**。
 
 ## 三、逐个按钮解读
-每个按钮单独一小段（有命中的至少 200 字；当日 0 只命中的也要写一段，说明"0 只说明什么"）：
+每个按钮单独一小段（有命中的至少 200 字；当日 0 只只表示该规则无确认命中，需披露数据缺口）：
 名单整体特征、量价形态、**点名 3~5 只个股并带上给定数据里的具体数字**（量比5、DIFF、J 值、
 布林位置、箱体位置、反转分与证据等）、这批票适合短线博弈还是先观察、以及名单里的反例
 （例如放量大涨中出现滞涨或冲高回落的样本）。
@@ -220,10 +222,16 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
         "views_stats": {},
         INDUSTRY_TOP: {},
     }
+    from .data_quality import turnover_quality
+    digest["数据质量"] = turnover_quality(store.conn, str(trade_date))
     if frame is None or frame.empty:
         return digest
 
     rows = frame.to_dict("records")
+    for row in rows:
+        value = _num(row.get("turnover"))
+        if (_num(row.get("volume")) or 0) > 0 and (value is None or value <= 0):
+            row["turnover"] = None
     industry_label, industry = _industry_map(store, cfg)
     if industry_label:
         digest["行业口径"] = industry_label
@@ -267,7 +275,7 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
                 "行业": industry.get(str(r.get("secid")), ""),
                 "涨跌幅%": round(_num(r.get("pct_chg")) or 0, 2),
                 "成交额亿": round((_num(r.get("amount")) or 0) / 1e8, 2),
-                "换手%": round(_num(r.get("turnover")) or 0, 2),
+                "换手%": round(_num(r.get("turnover")), 2) if _num(r.get("turnover")) is not None else None,
                 metric_label: (
                     r.get(metric_key)
                     if isinstance(r.get(metric_key), str)
@@ -312,7 +320,7 @@ def build_digest(store: Store, cfg, trade_date: str, top_n: Optional[int] = None
                 "板块": str(r.get("board") or ""),
                 "涨跌幅%": round(_num(r.get("pct_chg")) or 0, 2),
                 "成交额亿": round((_num(r.get("amount")) or 0) / 1e8, 2),
-                "换手%": round(_num(r.get("turnover")) or 0, 2),
+                "换手%": round(_num(r.get("turnover")), 2) if _num(r.get("turnover")) is not None else None,
                 "量比5": round(_num(r.get("vol_ratio_5")) or 0, 2),
                 "命中": str(r.get("signals") or ""),
             }

@@ -237,6 +237,24 @@ def test_parse_quote_payload_accepts_tr_field_alias():
     assert rows[0]["turnover"] == 1.5
 
 
+@pytest.mark.parametrize(
+    "volume,hs,tr,expected,quality",
+    [
+        (100, 0, None, None, "unknown"),
+        (100, 0, 1.5, 1.5, "reported_tr"),
+        (100, None, 1.5, 1.5, "reported_tr"),
+        (100, 2.0, 1.5, 2.0, "reported_hs"),
+        (100, -1, float("nan"), None, "unknown"),
+        (0, 0, None, 0, "reported_hs"),
+        (None, 0, None, None, "unknown"),
+    ],
+)
+def test_parse_quote_turnover_quality(volume, hs, tr, expected, quality):
+    row = parse_quote_payload([{"dm": "600519", "v": volume, "hs": hs, "tr": tr}])[0]
+    assert row["turnover"] == expected
+    assert row["turnover_quality"] == quality
+
+
 def test_align_quotes_by_position_without_dm():
     """ssjy_more 的返回体可能没有 dm：按请求顺序对齐；数量对不上就放弃。"""
     payload = [{"p": 10.0, "yc": 9.9, "v": 100}, {"p": 20.0, "yc": 19.9, "v": 200}]

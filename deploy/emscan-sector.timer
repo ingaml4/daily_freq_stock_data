@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh shared sector snapshot every 30 seconds during trading hours
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09..15:*:00,30 Asia/Shanghai
+AccuracySec=1s
+Persistent=false
+Unit=emscan-sector.service
+
+[Install]
+WantedBy=timers.target

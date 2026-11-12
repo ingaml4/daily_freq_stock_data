@@ -163,6 +163,11 @@ def build_summary(result: ScanResult, cfg) -> str:
             )
         ),
     ]
+    if stats.get("turnover_unknown_active"):
+        lines.append(
+            f"换手待核 {stats['turnover_unknown_active']} 只，其中满足其他放量条件 "
+            f"{stats.get('turnover_pending_candidates', 0)} 只；命中数不包含待核候选。"
+        )
     return "\n".join(lines)
 
 

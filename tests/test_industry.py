@@ -154,6 +154,10 @@ def test_digest_reports_industry_distribution(tmp_path):
     frame = pd.DataFrame(rows)
 
     class StoreStub:
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE bars(date TEXT, close REAL, volume REAL, turnover REAL)")
+
         def load_daily_signals(self, **_kwargs):
             return frame
 

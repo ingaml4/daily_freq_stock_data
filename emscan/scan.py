@@ -42,6 +42,7 @@ SCAN_COLUMNS = (
     "turnover",
     "float_mv",
     "volume_ratio",
+    "source",
 )
 
 
@@ -228,16 +229,21 @@ def scan(
     res["name"] = res["name"].fillna("").astype(str)
     res["is_st"] = res["is_st"].fillna(0).astype(int)
     res["amount"] = res["amount"].fillna(0.0)
-    # 换手率缺失时用 成交额/流通市值 估一个，保证门槛判断不会因为字段缺失而放行
-    turnover = res["turnover"]
-    fallback = res["amount"] / res["float_mv"].replace(0, np.nan) * 100.0
-    res["turnover"] = turnover.where(turnover.notna(), fallback).fillna(0.0)
+    # 正成交且换手为 0 是接口占位，不是实际零换手；旧库也可能包含此值。
+    turnover = res["turnover"].replace([np.inf, -np.inf], np.nan)
+    turnover = turnover.where((turnover >= 0) & ~((res["volume"] > 0) & (turnover == 0)))
+    # 只使用当日快照的流通市值和收盘价回算股本；历史 K 线的市值可能由
+    # 当前股本推算，不能当成历史当日股本。成交量单位为手，1 手 = 100 股。
+    source = today["source"] if "source" in today.columns else pd.Series(None, index=res.index)
+    valid_basis = (source == "spot") & (res["close"] > 0) & (res["float_mv"] > 0) & (res["volume"] > 0)
+    fallback = (res["volume"] * 100.0 * res["close"] / res["float_mv"] * 100.0).where(valid_basis)
+    fallback = fallback.replace([np.inf, -np.inf], np.nan)
+    res["turnover"] = turnover.where(turnover.notna(), fallback)
 
     eligible = res["valid_bars"] >= min_bars_cfg
     if exclude_suspended:
         eligible &= res["volume"] > 0
     eligible &= res["amount"] >= min_amount
-    eligible &= res["turnover"] >= min_turnover
     if exclude_st:
         name = res["name"]
         eligible &= (res["is_st"] == 0) & ~name.str.contains("ST|退", regex=True, na=False)
@@ -251,13 +257,15 @@ def scan(
     rule = rule.fillna(False) & vr5.notna()
 
     # ---- 全市场指标（给每日信号缓存）：命中与否都留一份，方便以后按别的阈值再筛
-    selected = eligible & rule
+    unknown_turnover = res["turnover"].isna() & (res["volume"] > 0)
+    pending = eligible & rule & unknown_turnover
+    selected = eligible & rule & (res["turnover"] >= min_turnover)
     full = res.copy()
     full["date"] = trade_date  # 放量指标是按"当天"算的：缓存行必须带交易日
-    full["s_vol_spike"] = selected.astype(int)
-    full["vol_signal"] = np.where(full["s_vol_spike"] > 0, _classify(full["pct_chg"]), None)
+    full["s_vol_spike"] = selected.astype(float).where(~pending, np.nan)
+    full["vol_signal"] = np.where(selected, _classify(full["pct_chg"]), None)
     full["vol_score"] = np.where(
-        full["s_vol_spike"] > 0, _score(full, baseline_window).to_numpy(dtype=float), np.nan
+        selected, _score(full, baseline_window).to_numpy(dtype=float), np.nan
     )
     full_out = full.reset_index()
     for column in DAILY_VOLUME_COLUMNS:
@@ -269,8 +277,10 @@ def scan(
     stats: Dict[str, Any] = {
         "trade_date": trade_date,
         "universe": int(len(secids)),
-        "scanned": int(eligible.sum()),
-        "candidates": int((eligible & rule).sum()),
+        "scanned": int((eligible & (res["turnover"] >= min_turnover)).sum()),
+        "candidates": int(selected.sum()),
+        "turnover_unknown_active": int(unknown_turnover.sum()),
+        "turnover_pending_candidates": int(pending.sum()),
         "thresholds": {
             "vol_ratio_5_min": v5_min,
             "vol_ratio_20_min": v20_min,

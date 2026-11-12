@@ -204,21 +204,57 @@ def test_z_metric_math_is_robust(tmp_path):
     assert abs(z) < 1.0
 
 
-def test_turnover_fallback_uses_float_market_cap(tmp_path):
-    """换手率字段缺失时，用 成交额/流通市值 估算，不让门槛被绕过。"""
+def test_turnover_fallback_uses_same_day_spot_float_market_cap(tmp_path):
+    """用当日快照价格和流通市值回算股本，成交量以手计。"""
     dates = trading_dates(80)
     secid = "0.300001"
     bars = flat_history(secid, dates[:-1], BASE)
     for row in bars:  # 清掉换手率，只留流通市值
         row["turnover"] = None
         row["float_mv"] = 1e10
-    bars.append(bar(secid, dates[-1], 5 * BASE, pct_chg=4.0, turnover=None, float_mv=1e10))
+    row = bar(secid, dates[-1], 5 * BASE, pct_chg=4.0, turnover=None, float_mv=1e10, amount=1e8)
+    row["source"] = "spot"
+    bars.append(row)
     symbols = symbols_frame([_symbol(secid, "缺换手率", board="sz_gem")])
     cfg = make_cfg(tmp_path)
     hits = scan(pd.DataFrame(bars), symbols, cfg, trade_date=dates[-1]).hits.set_index("secid")
     assert secid in hits.index
-    # 成交额 5e6 手 * 100 * 10 元 = 5e9 元 → 5e9/1e10 = 50%
+    # 5e6 手 * 100 股 / (1e10 元 / 10 元) = 50%，与成交额无关。
     assert float(hits.loc[secid, "turnover"]) == pytest.approx(50.0, rel=1e-3)
+
+
+def test_unknown_turnover_is_pending_only_when_other_rules_pass(tmp_path):
+    cfg = make_cfg(tmp_path)
+    bars, symbols = build_market()
+    today = bars["date"] == TRADE_DATE
+    bars.loc[today & bars["secid"].isin(["1.600001", "1.600003", "1.600002"]), "turnover"] = np.nan
+    bars.loc[today & (bars["secid"] == "1.600004"), "turnover"] = 0  # 旧占位
+    bars.loc[today & (bars["secid"] == "1.600009"), "turnover"] = 0.1  # 真实低换手
+    bars.loc[today & (bars["secid"] == "1.600007"), "turnover"] = 0  # 无成交
+    result = scan_market(cfg, bars, symbols)
+    metrics = result.all_metrics.set_index("secid")
+    assert result.stats["turnover_unknown_active"] == 4
+    assert result.stats["turnover_pending_candidates"] == 3
+    for secid in ("1.600001", "1.600003", "1.600004"):
+        assert pd.isna(metrics.loc[secid, "turnover"])
+        assert pd.isna(metrics.loc[secid, "s_vol_spike"])
+        assert secid not in set(result.hits["secid"])
+    assert metrics.loc["1.600002", "s_vol_spike"] == 0  # 量比不达标
+    assert metrics.loc["1.600009", "s_vol_spike"] == 0
+    assert metrics.loc["1.600007", "turnover"] == 0
+    assert metrics.loc["1.600007", "s_vol_spike"] == 0
+
+
+def test_historical_float_market_cap_is_not_used_as_same_day_basis(tmp_path):
+    bars, symbols = build_market()
+    mask = (bars["date"] == TRADE_DATE) & (bars["secid"] == "1.600001")
+    bars.loc[mask, "turnover"] = 0
+    bars.loc[mask, "float_mv"] = 1e10
+    bars.loc[mask, "source"] = "kline"
+    result = scan_market(make_cfg(tmp_path), bars, symbols)
+    row = result.all_metrics.set_index("secid").loc["1.600001"]
+    assert pd.isna(row["turnover"])
+    assert pd.isna(row["s_vol_spike"])
 
 
 def test_top_n_limits_output(tmp_path):

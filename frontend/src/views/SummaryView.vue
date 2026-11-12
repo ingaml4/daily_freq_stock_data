@@ -6,6 +6,7 @@ import MarkdownIt from "markdown-it";
 import DOMPurify from "dompurify";
 import { getJson } from "../api";
 import MarketMainline from "../components/MarketMainline.vue";
+import PersonalOpportunities from "../components/PersonalOpportunities.vue";
 import PageState from "../components/PageState.vue";
 import { localTime, message } from "../components/presentation";
 
@@ -114,6 +115,10 @@ onBeforeUnmount(() => controller?.abort());
     v-if="!loading || selectedDate"
     :date="selectedDate || undefined"
     @dates="marketDates = $event"
+  />
+  <personal-opportunities
+    v-if="!loading || selectedDate"
+    :date="selectedDate || undefined"
   />
   <page-state
     :loading="loading"

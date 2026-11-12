@@ -1,0 +1,14 @@
+[Unit]
+Description=Shared Tencent sector snapshot collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=admin
+WorkingDirectory=/home/admin/daily_freq_stock_data
+Environment=TZ=Asia/Shanghai
+ExecStart=/bin/python3 -m emscan.sector_snapshot --membership data/sector-membership.json --output data/sector-snapshot.json --market-hours --calendar-db data/market.sqlite
+TimeoutStartSec=28
+NoNewPrivileges=yes
+

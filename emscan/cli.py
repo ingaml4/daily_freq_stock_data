@@ -1213,6 +1213,13 @@ def _run_locked(cfg: Config, args: argparse.Namespace) -> int:
                     materialize(store, day)
                 except Exception:
                     log.exception("市场主线归档失败")
+                if rc == 0:
+                    try:
+                        from .opportunity_archive import materialize as materialize_opportunities
+
+                        materialize_opportunities(store, day)
+                    except Exception:
+                        log.exception("个人机会准备归档失败")
 
 
 def _daily_pipeline(cfg: Config, args: argparse.Namespace) -> int:

@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import random
 import threading
 import time
@@ -571,9 +572,18 @@ def parse_quote_payload(payload: Any, secid_hint: Optional[str] = None) -> List[
         basis = close if close else prev_close
         float_shares = float_mv / basis if (float_mv is not None and basis) else None
         volume = to_float(item.get("v"))
-        turnover = to_float(item.get("hs"))
-        if turnover is None:
-            turnover = to_float(item.get("tr"))  # ssjy_more 的换手率字段名叫 tr
+        # 成交量为正时接口偶尔以 0 占位；不能把它当成真实零换手。
+        # 同一报文中的 tr 与 hs 都以百分比表示，择有效字段使用。
+        turnover = None
+        turnover_quality = "unknown"
+        for field in ("hs", "tr"):
+            value = to_float(item.get(field))
+            if value is None or not math.isfinite(value) or value < 0:
+                continue
+            if value > 0 or volume == 0:
+                turnover = value
+                turnover_quality = "reported_" + field
+                break
         rows.append(
             {
                 "secid": secid,
@@ -593,6 +603,7 @@ def parse_quote_payload(payload: Any, secid_hint: Optional[str] = None) -> List[
                 "pct_chg": to_float(item.get("pc")),  # %
                 "chg": to_float(item.get("ud")),  # 元
                 "turnover": turnover,  # %
+                "turnover_quality": turnover_quality,  # 解析质量；落库后可由空值判断
                 "volume_ratio": to_float(item.get("lb")),  # 量比（快照口径，仅当日有）
                 "total_mv": to_float(item.get("sz")),  # 元
                 "float_mv": float_mv,  # 元

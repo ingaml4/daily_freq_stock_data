@@ -214,6 +214,9 @@ def _signals_frame(rows):
 
 class _Store:
     def __init__(self, frame):
+        import sqlite3
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.execute("CREATE TABLE bars(date TEXT, close REAL, volume REAL, turnover REAL)")
         self.frame = frame
 
     def load_daily_signals(self, **_kwargs):
