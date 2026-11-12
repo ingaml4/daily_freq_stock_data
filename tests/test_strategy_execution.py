@@ -90,6 +90,28 @@ def test_trigger_latches_through_limit_down_and_suspension():
     assert r["sell"]["price"] == 9.6
 
 
+def test_entry_timing_uses_next_open_and_same_signal_anchored_exit():
+    signal = dict(SIGNAL, confirmation_price=10.0)
+    changes = {6: bar(10, 10.2), 7: bar(10.1, 10, 10.2)}
+    outcomes = [run(changes, candidate=signal, policy="fixed_5d", entry_policy=arm)
+                for arm in ("open", "daily_confirmation")]
+    assert [o["buy"]["date"] for o in outcomes] == DAYS[6:8]
+    assert outcomes[1]["buy"]["price"] == 10.1
+    assert [o["sell"]["date"] for o in outcomes] == [DAYS[10], DAYS[10]]
+    changes[7] = bar(9.95, 10, 10.2)
+    cancelled = run(changes, candidate=signal, policy="fixed_5d", entry_policy="daily_confirmation")
+    assert cancelled["status"] == "confirmation_lost" and not cancelled["buy"]
+
+
+def test_entry_timing_does_not_count_missing_confirmation_or_exit_as_known_cash():
+    signal = dict(SIGNAL, confirmation_price=9.99)
+    missing = run({6: None}, candidate=signal, policy="fixed_5d", entry_policy="daily_confirmation")
+    assert missing["status"] == "unavailable" and not missing["buy"]
+    delayed = run({10: None}, candidate=signal, policy="fixed_5d", entry_policy="open")
+    assert delayed["target_date"] == DAYS[10] and delayed["sell"]["date"] == DAYS[11]
+    assert delayed["path_gaps"] == [DAYS[10]] and not delayed["eligible_for_validation"]
+
+
 @pytest.mark.parametrize("policy", ["fixed_5d", "structure_time"])
 def test_open_at_floor_retires_candidate_and_blocked_entry_cannot_chase_after_bad_close(policy):
     for changes in ({6: bar(9.7, 10)}, {6: bar(11, 9.6), 7: bar(10, 10, 9.6)}):

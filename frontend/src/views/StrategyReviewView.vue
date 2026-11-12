@@ -67,6 +67,24 @@ interface ReviewData {
   };
 }
 type ArmRow = Arm & { key: string; name: string };
+interface EntryTiming {
+  start: string;
+  mature_signal_end: string | null;
+  mature_signal_sessions: number;
+  mature_candidates: {
+    candidates: number;
+    O: Statistics;
+    R: Statistics;
+    paired: { both_closed: number; R_minus_O_mean: number | null; loss_skipped?: number; gain_missed?: number };
+  };
+  by_mode: Record<string, { candidates: number }>;
+  cash_mature: { arms: Record<"O" | "R", Portfolio> };
+}
+const entryTiming = ref<EntryTiming | null>(null);
+const entryArms = [
+  { id: "O", label: "开盘直买" },
+  { id: "R", label: "日线确认后买入" },
+] as const;
 const names: Record<string, string> = {
   baseline: "原四信号对照",
   setups: "趋势突破 + 止跌确认",
@@ -201,6 +219,9 @@ async function load() {
   const current = controller;
   loading.value = true;
   error.value = "";
+  void getJson<EntryTiming>("/api/strategy-review/entry-timing", undefined, current.signal)
+    .then((report) => { if (!current.signal.aborted) entryTiming.value = report; })
+    .catch(() => { if (!current.signal.aborted) entryTiming.value = null; });
   try {
     data.value = await getJson<ReviewData>(
       "/api/strategy-review",
@@ -291,6 +312,41 @@ onBeforeUnmount(() => controller?.abort());
         单笔平均净收益只统计可核验完成买卖的条件性样本，各组覆盖不同。执行或估值数据不完整的组合显示“无法验证”。
       </p>
     </section>
+    <section v-if="entryTiming" class="panel detail-panel section">
+      <h2 class="section-heading">A/B/C 入场时点实验</h2>
+      <p class="data-note">
+        {{ entryTiming.start }} 至 {{ entryTiming.mature_signal_end || "尚无到期信号日" }}，
+        {{ entryTiming.mature_signal_sessions }} 个信号日已到 D+5，
+        {{ entryTiming.mature_candidates.candidates }} 条候选。
+        A {{ entryTiming.by_mode.A.candidates }} · B {{ entryTiming.by_mode.B.candidates }} · C {{ entryTiming.by_mode.C.candidates }}。
+      </p>
+      <p class="data-note">探索性日线回放。两组分别在 D+1 开盘尝试，或等 D+1 收盘确认后在 D+2 开盘尝试。盘中确认样本覆盖不足。</p>
+      <div class="entry-table-wrap">
+        <table class="entry-table">
+          <thead><tr><th scope="col">入场规则</th><th scope="col">完成买卖</th><th scope="col">单笔平均净收益</th><th scope="col">组合净值变动</th><th scope="col">最大回撤</th></tr></thead>
+          <tbody>
+            <tr v-for="arm in entryArms" :key="arm.id">
+              <th scope="row">{{ arm.label }}</th>
+              <td>{{ entryTiming.mature_candidates[arm.id].closed }}</td>
+              <td>{{ percent(entryTiming.mature_candidates[arm.id].mean_net_return, true, 2) }}</td>
+              <td>{{ percent(entryTiming.cash_mature.arms[arm.id].net_return, true, 2) }}</td>
+              <td>{{ percent(entryTiming.cash_mature.arms[arm.id].max_drawdown, true, 2) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-if="entryArms.some(arm => !entryTiming?.cash_mature.arms[arm.id].valid_for_comparison)" class="data-note">
+        部分执行或估值有缺口。表内组合净值与回撤为条件性估算，持仓缺口仍占用资金。
+      </p>
+      <p class="data-note">
+        两组均完成 {{ entryTiming.mature_candidates.paired.both_closed }} 笔，
+        确认组相对开盘组平均净收益差 {{ entryTiming.mature_candidates.paired.R_minus_O_mean === null
+          ? "—" : `${(entryTiming.mature_candidates.paired.R_minus_O_mean * 100).toFixed(2)} 个百分点` }}。
+        确认组跳过 {{ entryTiming.mature_candidates.paired.loss_skipped ?? 0 }} 笔亏损，错过 {{ entryTiming.mature_candidates.paired.gain_missed ?? 0 }} 笔盈利。
+      </p>
+      <a href="/api/strategy-review/entry-timing">报告数据</a> ·
+      <a href="/api/strategy-review/entry-timing/orders">逐笔对照</a>
+    </section>
     <div class="review-details section">
       <section class="panel detail-panel">
         <h2 class="section-heading">本轮依据</h2>
@@ -365,6 +421,21 @@ onBeforeUnmount(() => controller?.abort());
 <style scoped>
 .section {
   margin-top: 22px;
+}
+.entry-table-wrap {
+  overflow-x: auto;
+}
+.entry-table {
+  border-collapse: collapse;
+  width: 100%;
+  white-space: nowrap;
+}
+.entry-table th, .entry-table td {
+  padding: 8px 12px;
+  text-align: right;
+}
+.entry-table th:first-child {
+  text-align: left;
 }
 .review-status p {
   margin: 6px 0 0;

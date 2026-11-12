@@ -76,10 +76,10 @@ def _settings(cfg, opts):
     return result
 
 
-def _structure(out, days, series, opts, time_exit):
+def _structure(out, days, series, opts, time_exit, *, target_index=None):
     buy = out["buy"]
     start = bisect_left(days, buy["date"])
-    target = start + time_exit
+    target = start + time_exit if target_index is None else target_index
     out["target_date"] = days[target] if target < len(days) else None
     stop = out["invalidation_price"]
     limit, _ = execution._board(out["secid"])
@@ -92,6 +92,12 @@ def _structure(out, days, series, opts, time_exit):
         day = days[n]
         bar = series.get(day)
         reason, bounds = execution._session(bar, prev, limit)
+        if target_index is not None and not bar:
+            out.setdefault("path_gaps", []).append(day)
+            if out["trigger_date"] or n >= target:
+                out["exit_attempts"].append({"date": day, "reason": reason})
+                out.update(status="blocked_exit", reason=reason)
+            continue
         if reason and reason != "停牌或零成交":
             out.update(status="unavailable", reason=reason, problem_date=day)
             return
@@ -119,7 +125,8 @@ def _structure(out, days, series, opts, time_exit):
 
 
 def simulate_candidate(
-    candidate, days, series, cfg=None, *, opts=None, exit_policy="fixed_5d", time_exit=5, as_of=None
+    candidate, days, series, cfg=None, *, opts=None, exit_policy="fixed_5d", time_exit=5, as_of=None,
+    entry_policy=None, structure_sensitivity=False,
 ):
     """days 为完整、升序交易日；series 含 D 日及之前的上市行情证据。
 
@@ -129,6 +136,10 @@ def simulate_candidate(
     """
     if exit_policy not in RULES:
         raise ValueError("不支持的退出策略")
+    if (structure_sensitivity and not entry_policy) or entry_policy not in (None, "open", "daily_confirmation") or (
+        entry_policy and exit_policy != "fixed_5d"
+    ):
+        raise ValueError("入场对照仅支持共同的信号日后第五个交易日收盘退出")
     if (
         type(time_exit) is not int
         or time_exit < 1
@@ -181,7 +192,8 @@ def simulate_candidate(
         "original_baseline",
     )
     omit_floor = (
-        baseline and exit_policy == "fixed_5d" and candidate.get("invalidation_price") is None
+        baseline and not entry_policy and exit_policy == "fixed_5d"
+        and candidate.get("invalidation_price") is None
     )
     if not omit_floor and (stop is None or stop <= 0):
         out["reason"] = "缺少有效的名单日固定失效点"
@@ -218,6 +230,37 @@ def simulate_candidate(
         out.update(status="entry_invalidated", reason="名单日收盘不高于失效点")
         return out
 
+    offset, trigger = 1, None
+    if entry_policy:
+        options["entry_wait"] = 1
+        out["entry_policy"] = entry_policy
+        out["exit_rule_version"] = "signal_day_plus_5_close.v1"
+    if entry_policy == "daily_confirmation":
+        trigger = _number(candidate.get("confirmation_price"))
+        rules = execution._board(out["secid"])
+        if trigger is None or trigger <= 0 or not rules:
+            out["reason"] = "缺有效触发位或普通 A 股制度依据"
+            return out
+        if idx + 1 >= len(days):
+            out.update(status="pending_entry", reason="等候确认日收盘")
+            return out
+        confirm_day = days[idx + 1]
+        confirmation = bars.get(confirm_day)
+        reason, _ = execution._session(confirmation, signal, rules[0])
+        out["confirmation"] = {"date": confirm_day, "trigger": trigger, "reason": reason}
+        if reason:
+            if reason == "停牌或零成交":
+                out["status"] = "confirmation_not_met"
+            out["reason"] = reason
+            return out
+        out["confirmation"].update(open=confirmation["open"], close=confirmation["close"])
+        if min(confirmation["open"], confirmation["close"]) <= stop:
+            out.update(status="entry_invalidated", reason="确认日开盘或收盘不高于失效位")
+            return out
+        if confirmation["close"] <= trigger:
+            out.update(status="confirmation_not_met", reason="确认日收盘未站上触发位")
+            return out
+        offset = 2
     first = candidate.get("first_seen")
     if not first:
         first = min(
@@ -232,12 +275,16 @@ def simulate_candidate(
     row = dict(candidate, status="已完成", generated_at=day, date=day)
     horizons = (5,) if exit_policy == "fixed_5d" else ()
     order = execution.simulate(
-        row, days, idx, bars, str(first) if first else None, horizons, options, entry_floor=stop
+        row, days, idx, bars, str(first) if first else None, horizons, options, entry_floor=stop,
+        entry_offset=offset, entry_minimum=trigger, signal_anchored=bool(entry_policy),
     )
     out.update({k: order[k] for k in ("status", "reason", "buy", "entry_attempts")})
     if order["buy"]:
-        if exit_policy == "structure_time":
-            _structure(out, days, bars, options, time_exit)
+        if exit_policy == "structure_time" or structure_sensitivity:
+            target_index = idx + time_exit if structure_sensitivity else None
+            _structure(out, days, bars, options, time_exit, target_index=target_index)
+            if structure_sensitivity:
+                out["exit_rule_version"] = "structure_or_signal_day_plus_5.v1"
         else:
             exit_ = order["exits"][5]
             out.update({k: v for k, v in exit_.items() if k != "attempts"})
@@ -252,8 +299,8 @@ def simulate_candidate(
         )
         out.update(
             available=True,
-            eligible_for_validation=True,
-            quality="spot_daily_simulation",
+            eligible_for_validation=not out.get("path_gaps"),
+            quality="spot_daily_with_unverified_gaps" if out.get("path_gaps") else "spot_daily_simulation",
             cost=out["total_cost"],
         )
     elif out["status"] == "unavailable":

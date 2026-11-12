@@ -101,12 +101,17 @@ def test_review_artifacts_are_authenticated_and_do_not_run_research(tmp_path):
     (folder / "report.json").write_text(
         json.dumps({"approved_strategies": [], "live_selection_changed": False})
     )
+    (folder / "entry-timing").mkdir()
+    (folder / "entry-timing" / "report.json").write_text('{"version":"abc-entry-timing-v1"}')
     server = serve(
         lambda: Store(path), host="127.0.0.1", port=0, password="test", blocking=False
     )
     base = f"http://127.0.0.1:{server.server_port}/api/strategy-review"
     try:
         assert requests.get(base, timeout=5).status_code == 401
+        assert requests.get(base + "/entry-timing", timeout=5).status_code == 401
+        study = requests.get(base + "/entry-timing", auth=("", "test"), timeout=5)
+        assert study.json()["version"] == "abc-entry-timing-v1"
         result = requests.get(base, auth=("", "test"), timeout=5)
         assert (
             result.status_code == 200

@@ -115,7 +115,8 @@ def _shares(price, minimum, opts):
     return count if count >= minimum else 0
 
 
-def simulate(row, days, idx, series, first_seen, horizons, opts, *, entry_floor=None):
+def simulate(row, days, idx, series, first_seen, horizons, opts, *, entry_floor=None,
+             entry_offset=1, entry_minimum=None, signal_anchored=False):
     out = {"status": "pending_entry", "reason": "", "entry_attempts": [], "buy": None, "exits": {}}
     if row["status"] == "事后补生成" or (row.get("generated_at") or "")[:10] != row["date"]:
         out.update(status="excluded", reason="名单事后生成或生成时间缺失")
@@ -128,9 +129,9 @@ def simulate(row, days, idx, series, first_seen, horizons, opts, *, entry_floor=
         out.update(status="unavailable", reason="缺少名单日交易日历或超出已核验制度时期")
         return out
     limit, minimum = rules
-    prev = series.get(row["date"])
+    prev = series.get(days[idx + entry_offset - 1])
     idx_buy = None
-    for offset in range(1, opts["entry_wait"] + 1):
+    for offset in range(entry_offset, entry_offset + opts["entry_wait"]):
         n = idx + offset
         if n >= len(days):
             out["reason"] = "等候下一次买入交易日"
@@ -145,6 +146,11 @@ def simulate(row, days, idx, series, first_seen, horizons, opts, *, entry_floor=
             reason = "开盘价不高于名单日失效点，取消入场"
             out["entry_attempts"].append({"date": day, "reason": reason})
             out.update(status="entry_invalidated", reason=reason)
+            return out
+        if not reason and entry_minimum is not None and bar["open"] < entry_minimum:
+            reason = "确认后开盘低于触发位，取消入场"
+            out["entry_attempts"].append({"date": day, "reason": reason})
+            out.update(status="confirmation_lost", reason=reason)
             return out
         if not reason and bar["open"] >= bounds[1]:
             reason = "开盘涨停，买入排队不可确认"
@@ -180,8 +186,9 @@ def simulate(row, days, idx, series, first_seen, horizons, opts, *, entry_floor=
         for h in horizons
     }
     out["exits"] = pending
+    origin = idx if signal_anchored else idx_buy
     for n in range(idx_buy + 1, len(days)):
-        h_day = n - idx_buy
+        h_day = n - origin
         day = days[n]
         bar = series.get(day)
         reason, bounds = _session(bar, prev, limit)
@@ -190,6 +197,12 @@ def simulate(row, days, idx, series, first_seen, horizons, opts, *, entry_floor=
             if h_day == horizon:
                 item["target_date"] = day
             if item["status"] in ("closed", "unavailable"):
+                continue
+            if signal_anchored and not bar:
+                item.setdefault("path_gaps", []).append(day)
+                if h_day >= horizon:
+                    item["attempts"].append({"date": day, "reason": reason})
+                    item.update(status="blocked_exit", reason=reason)
                 continue
             if reason and reason != "停牌或零成交":
                 item.update(status="unavailable", reason=reason, problem_date=day)
@@ -211,8 +224,8 @@ def simulate(row, days, idx, series, first_seen, horizons, opts, *, entry_floor=
         if all(item["status"] in ("closed", "unavailable") for item in pending.values()):
             break
     for horizon, item in pending.items():
-        if idx_buy + horizon < len(days):
-            item["target_date"] = days[idx_buy + horizon]
+        if origin + horizon < len(days):
+            item["target_date"] = days[origin + horizon]
     return out
 
 

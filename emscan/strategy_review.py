@@ -132,6 +132,8 @@ def portfolio(orders, prices, days, start, capital=800000.0):
     blocked = Counter()
     nav = []
     complete = True
+    traded_notional = 0.0
+    filled = 0
     planned = {}
     for order in orders:
         buy = order.get("buy")
@@ -142,7 +144,7 @@ def portfolio(orders, prices, days, start, capital=800000.0):
             continue
 
         def sell_due(phase):
-            nonlocal cash
+            nonlocal cash, traded_notional
             for sid, order in list(holdings.items()):
                 sell = order.get("sell") or {}
                 if (
@@ -150,6 +152,7 @@ def portfolio(orders, prices, days, start, capital=800000.0):
                     and sell.get("execution_phase", "close") == phase
                 ):
                     cash += sell["cash"]
+                    traded_notional += sell.get("gross", sell["cash"])
                     closed.append(order)
                     del holdings[sid]
 
@@ -163,6 +166,8 @@ def portfolio(orders, prices, days, start, capital=800000.0):
             else:
                 cash -= buy["cash"]
                 holdings[sid] = order
+                traded_notional += buy.get("gross", buy["cash"])
+                filled += 1
         sell_due("close")
         value = cash
         for sid, order in holdings.items():
@@ -176,11 +181,12 @@ def portfolio(orders, prices, days, start, capital=800000.0):
                 bar.get("source") != "spot"
                 or not valid_price
                 or order["status"] == "unavailable"
+                or order.get("path_gaps")
             ):
                 complete = False
                 blocked["unverified_valuation_days"] += 1
             mark = (
-                bar.get("close") if bar.get("close", 0) > 0 else order["buy"]["price"]
+                bar["close"] if valid_price else order["buy"]["price"]
             )
             value += mark * order["buy"]["shares"]
         nav.append(
@@ -194,7 +200,8 @@ def portfolio(orders, prices, days, start, capital=800000.0):
     equity = np.array([capital] + [n["equity"] for n in nav])
     drawdowns = equity / np.maximum.accumulate(equity) - 1
     execution_complete = all(
-        o["status"] != "unavailable" for o in orders if o["date"] >= start
+        o["status"] != "unavailable" and not o.get("path_gaps")
+        for o in orders if o["date"] >= start
     )
     return {
         "initial_capital": capital,
@@ -206,6 +213,9 @@ def portfolio(orders, prices, days, start, capital=800000.0):
         "execution_data_complete": execution_complete,
         "valid_for_comparison": complete and execution_complete,
         "completed_trades": len(closed),
+        "filled_trades": filled,
+        "gross_traded_notional": round(traded_notional, 2),
+        "gross_turnover_on_initial_capital": traded_notional / capital,
         "open_positions": len(holdings),
         "blocked": dict(blocked),
         "daily_equity": nav,

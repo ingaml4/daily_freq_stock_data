@@ -2162,6 +2162,18 @@ def make_handler(
                 self._send(body, ctype=ctype)
                 return
 
+            if path in ("/api/strategy-review/entry-timing", "/api/strategy-review/entry-timing/orders"):
+                with store_factory() as st:
+                    root = st.path.parent / "strategy-review" / "entry-timing"
+                target = root / ("orders.json" if path.endswith("/orders") else "report.json")
+                try:
+                    body = target.read_bytes()
+                except FileNotFoundError:
+                    self._send(b'{"error":"entry_timing_study_not_generated"}', 404, "application/json")
+                    return
+                self._send(body, ctype="application/json; charset=utf-8")
+                return
+
             if path == "/api/sector-snapshot":
                 from .sector_snapshot import build_sector_snapshot_payload
 
