@@ -1206,6 +1206,13 @@ def _run_locked(cfg: Config, args: argparse.Namespace) -> int:
             store.record_run("run_finished", trade_date=day,
                              params={"generation": generation, "exit_code": rc,
                                      "code_version": code_version()})
+            if store.latest_date() == day:
+                try:
+                    from .market_mainline import materialize
+
+                    materialize(store, day)
+                except Exception:
+                    log.exception("市场主线归档失败")
 
 
 def _daily_pipeline(cfg: Config, args: argparse.Namespace) -> int:

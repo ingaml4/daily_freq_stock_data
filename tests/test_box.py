@@ -229,4 +229,6 @@ def test_v13_migration_preserves_legacy_box_values_without_market_rows(tmp_path)
             "SELECT s_box_range,box_high,box_rule_version FROM daily_signals"
         ).fetchone()
         assert tuple(row) == (1, 12.3, None)
-        assert st.conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        from emscan.store import SCHEMA_VERSION
+
+        assert st.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION

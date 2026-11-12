@@ -27,7 +27,7 @@ from .mairui import BAR_FIELDS, INDICATOR_MAP
 log = logging.getLogger(__name__)
 
 # 表结构版本号：改 SCHEMA / 迁移逻辑就 +1（init_schema 靠它决定要不要重建）
-SCHEMA_VERSION = 14  # 箱体突破规则版本与突破幅度
+SCHEMA_VERSION = 15  # 保留被替换的板块成分版本
 
 DAILY_SIGNALS_VIEW = """CREATE VIEW IF NOT EXISTS daily_signals_named AS
 SELECT
@@ -247,6 +247,21 @@ CREATE TABLE IF NOT EXISTS symbol_tags (
 );
 
 CREATE INDEX IF NOT EXISTS idx_symbol_tags_kind ON symbol_tags(kind, secid);
+
+CREATE TABLE IF NOT EXISTS symbol_tag_history (
+    kind        TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    secid       TEXT NOT NULL,
+    code        TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    PRIMARY KEY (kind, observed_at, secid, code)
+);
+
+CREATE TABLE IF NOT EXISTS market_mainline_reports (
+    date         TEXT PRIMARY KEY,
+    generated_at TEXT NOT NULL,
+    payload      TEXT NOT NULL
+);
 
 -- 复盘梯队名单（第一/第二梯队）：T 日复盘给出的观察名单，之后按 1/5/10/20 交易日跟踪
 CREATE TABLE IF NOT EXISTS tier_picks (
@@ -625,22 +640,32 @@ class Store:
     # ------------------------------------------------------ 板块归属（行业/概念）
     def replace_symbol_tags(self, kind: str, rows: Iterable[Dict[str, Any]]) -> int:
         """整类覆盖写：先删这类旧数据，再写新数据（源数据每周整棵更新，避免残留退役节点）。"""
+        from .tzutil import now
+
         payload = []
-        stamp = _now()
+        stamp = now().strftime("%Y-%m-%d %H:%M:%S.%f")
         for row in rows:
             secid = str(row.get("secid") or "")
             code = str(row.get("code") or "")
             if not secid or not code:
                 continue
             payload.append((secid, str(kind), code, str(row.get("name") or ""), stamp))
-        self.conn.execute("DELETE FROM symbol_tags WHERE kind = ?", (str(kind),))
-        if payload:
-            self.conn.executemany(
-                "INSERT OR REPLACE INTO symbol_tags (secid, kind, code, name, updated_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                payload,
+        with self.conn:
+            # Capture the old complete version before replacing it in the same transaction.
+            self.conn.execute(
+                "INSERT OR IGNORE INTO symbol_tag_history(kind,observed_at,secid,code,name) "
+                "SELECT kind,v.observed_at,secid,code,name FROM symbol_tags "
+                "CROSS JOIN (SELECT MAX(updated_at) AS observed_at FROM symbol_tags WHERE kind=?) v "
+                "WHERE kind=? AND v.observed_at IS NOT NULL",
+                (str(kind), str(kind)),
             )
-        self.conn.commit()
+            self.conn.execute("DELETE FROM symbol_tags WHERE kind = ?", (str(kind),))
+            if payload:
+                self.conn.executemany(
+                    "INSERT OR REPLACE INTO symbol_tags (secid, kind, code, name, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    payload,
+                )
         self.bump_data_version()
         return len(payload)
 

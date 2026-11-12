@@ -2162,6 +2162,32 @@ def make_handler(
                 self._send(body, ctype=ctype)
                 return
 
+            if path == "/api/market-mainline":
+                from .market_mainline import report
+
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                dates = query.get("date")
+                day = dates[0] if dates and len(dates) == 1 else None
+                if not password:
+                    self._send(b'{"error":"market_mainline_unavailable"}', 503, "application/json")
+                    return
+                if set(query) - {"date"} or ("date" in query and not day):
+                    self._send(b'{"error":"expected one date in YYYY-MM-DD"}', 400, "application/json")
+                    return
+                try:
+                    if day and dt.date.fromisoformat(day).isoformat() != day:
+                        raise ValueError()
+                except ValueError:
+                    self._send(b'{"error":"date must be YYYY-MM-DD"}', 400, "application/json")
+                    return
+                with store_factory() as st:
+                    result = report(st, day)
+                self._send(
+                    json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8"),
+                    ctype="application/json; charset=utf-8",
+                )
+                return
+
             if path == "/api/readiness":
                 from .readiness import report
 

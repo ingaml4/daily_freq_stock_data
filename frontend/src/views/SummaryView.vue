@@ -5,6 +5,7 @@ import { NAlert, NButton, NSelect, NTag } from "naive-ui";
 import MarkdownIt from "markdown-it";
 import DOMPurify from "dompurify";
 import { getJson } from "../api";
+import MarketMainline from "../components/MarketMainline.vue";
 import PageState from "../components/PageState.vue";
 import { localTime, message } from "../components/presentation";
 
@@ -25,6 +26,7 @@ interface SummaryData {
 const route = useRoute();
 const router = useRouter();
 const data = ref<SummaryData | null>(null);
+const marketDates = ref<string[]>([]);
 const loading = ref(true);
 const error = ref("");
 let controller: AbortController | undefined;
@@ -35,7 +37,10 @@ const html = computed(() =>
   }),
 );
 const dates = computed(() =>
-  (data.value?.dates || []).map((date) => ({ label: date, value: date })),
+  [...new Set([...(data.value?.dates || []), ...marketDates.value])]
+    .sort()
+    .reverse()
+    .map((date) => ({ label: date, value: date })),
 );
 const selectedDate = computed(() =>
   typeof route.query.date === "string"
@@ -105,6 +110,11 @@ onBeforeUnmount(() => controller?.abort());
       >
     </div>
   </div>
+  <market-mainline
+    v-if="!loading || selectedDate"
+    :date="selectedDate || undefined"
+    @dates="marketDates = $event"
+  />
   <page-state
     :loading="loading"
     :error="error"
