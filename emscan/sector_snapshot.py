@@ -96,10 +96,14 @@ def _parse(raw):
             amount = float(fields[35].split("/")[2])
             if not math.isfinite(amount) or amount < 0: amount = None
         except (ValueError, IndexError): amount = None
-        result[symbol] = {"name": fields[1], "price": number(3), "previous_close": number(4),
+        currency = "USD" if symbol.startswith("SH900") else "HKD" if symbol.startswith("SZ200") else "CNY"
+        result[symbol] = {"name": fields[1], "price": number(3), "price_currency": currency,
+                          "previous_close": number(4),
                           "open": number(5), "volume_lots": lots,
                           "volume_shares": lots * 100 if lots is not None else None,
-                          "amount_yuan": amount, "change_pct": number(32),
+                          "amount_yuan": amount if currency == "CNY" else None,
+                          "amount_reported": amount, "amount_currency_verified": currency == "CNY",
+                          "change_pct": number(32),
                           "source_at": source_at, "raw_fields": fields}
     return result
 

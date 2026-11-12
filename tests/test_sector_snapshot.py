@@ -31,6 +31,15 @@ def test_scheduler_checks_cached_calendar_and_closed_hours(tmp_path, monkeypatch
     assert ss.main() == 0 and len(calls) == 1
 
 
+def test_b_share_prices_do_not_claim_cny_amount():
+    rows = ss._parse(quote("SH900913") + "\n" + quote("SZ200001") + "\n" + quote("SH600001"))
+    assert rows["SH900913"]["price_currency"] == "USD"
+    assert rows["SZ200001"]["price_currency"] == "HKD"
+    assert rows["SH900913"]["amount_yuan"] is None
+    assert rows["SZ200001"]["amount_yuan"] is None
+    assert rows["SH600001"]["amount_yuan"] == 10000
+
+
 def quote(symbol, timestamp="20261112100000", name="ST Test", price="10", lots="12", amount="10000", change="11.11"):
     fields = [""] * 37
     fields[1], fields[3], fields[4], fields[5], fields[6] = name, price, "9", "9.5", "12"
