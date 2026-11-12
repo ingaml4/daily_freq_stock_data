@@ -345,7 +345,9 @@ onBeforeUnmount(() => controller?.abort());
         确认组跳过 {{ entryTiming.mature_candidates.paired.loss_skipped ?? 0 }} 笔亏损，错过 {{ entryTiming.mature_candidates.paired.gain_missed ?? 0 }} 笔盈利。
       </p>
       <a href="/api/strategy-review/entry-timing">报告数据</a> ·
-      <a href="/api/strategy-review/entry-timing/orders">逐笔对照</a>
+      <router-link :to="{ path: '/strategy-review/orders', query: { dataset: 'abc' } }"
+        >逐笔对照</router-link
+      >
     </section>
     <div class="review-details section">
       <section class="panel detail-panel">
@@ -371,13 +373,8 @@ onBeforeUnmount(() => controller?.abort());
             <dd>{{ localTime(data?.generated_at) }}</dd>
           </div>
         </dl>
-        <n-button
-          tag="a"
-          href="/api/strategy-review/orders"
-          target="_blank"
-          secondary
-          size="small"
-          >查看逐笔信号与成交依据</n-button
+        <router-link :to="{ path: '/strategy-review/orders', query: { dataset: 'original' } }"
+          >查看逐笔信号与成交依据</router-link
         >
       </section>
       <section class="panel detail-panel">

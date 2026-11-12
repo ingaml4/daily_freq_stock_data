@@ -111,8 +111,12 @@ def _cash(records, prices, days, start, key="orders", priority="secid_asc"):
         queue.sort(key=lambda r: r["secid"], reverse=True)
     elif priority == "signal_amount_desc":
         queue.sort(key=lambda r: -(prices[r["secid"]].get(r["date"], {}).get("amount") or 0))
-    books = {arm: portfolio([r[key][arm] for r in queue], prices, days, start)
-             for arm in ARMS}
+    books = {}
+    for arm in ARMS:
+        orders = [r[key][arm] for r in queue]
+        if priority == "observed_entry_time":
+            orders.sort(key=lambda order: ((order.get("buy") or {}).get("at", ""), order["secid"]))
+        books[arm] = portfolio(orders, prices, days, start)
     return {"unique_candidates": len(unique), "overlapping_modes_removed": len(records) - len(unique),
             "same_day_priority": priority, "representative_mode_priority": list(MODES), "arms": books}
 

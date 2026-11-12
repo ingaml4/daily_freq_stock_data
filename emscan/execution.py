@@ -75,6 +75,14 @@ def _board(secid):
     return None
 
 
+def _limit_bounds(ref, limit):
+    ref_dec = Decimal(str(ref))
+    pct = Decimal(limit) / 100
+    high_limit = max(_money(ref_dec * (1 + pct)), _money(ref + 0.01))
+    low_limit = max(0.01, min(_money(ref_dec * (1 - pct)), _money(ref - 0.01)))
+    return low_limit, high_limit
+
+
 def _session(bar, prev, limit):
     """返回状态与方向性边界。没有行情时无法证明停牌，也无法判断能否成交。"""
     if not bar:
@@ -98,10 +106,7 @@ def _session(bar, prev, limit):
         return "缺少上一有效未复权收盘", None
     if _money(prev["close"]) != ref:
         return "参考昨收变动或除权，缺权益变动记录", None
-    ref_dec = Decimal(str(ref))
-    pct = Decimal(limit) / 100
-    high_limit = max(_money(ref_dec * (1 + pct)), _money(ref + 0.01))
-    low_limit = max(0.01, min(_money(ref_dec * (1 - pct)), _money(ref - 0.01)))
+    low_limit, high_limit = _limit_bounds(ref, limit)
     if h > high_limit + 1e-6 or l < low_limit - 1e-6:
         return "报价超出普通涨跌停范围，交易状态待核实", None
     return "", (low_limit, high_limit)
@@ -180,15 +185,24 @@ def simulate(row, days, idx, series, first_seen, horizons, opts, *, entry_floor=
     out.update(status="entered", reason="")
     if not horizons:
         return out
+    out["exits"] = close_exits(
+        out["buy"], days, idx_buy, idx if signal_anchored else idx_buy,
+        series, limit, horizons, opts, defer_missing=signal_anchored,
+    )
+    return out
+
+
+def close_exits(buy, days, entry_idx, origin_idx, series, limit, horizons, opts, *, defer_missing=False):
+    """Replay the same closing exits for daily and intraday simulated entries."""
+    prev = series.get(days[entry_idx])
+    qty = buy["shares"]
     # 持仓跨日若参考价变化或缺行情，现金分红/送转与路径无法核验，不再计算该段净收益。
     pending = {
         h: {"status": "pending_exit", "target_date": None, "attempts": [], "reason": "尚未到期"}
         for h in horizons
     }
-    out["exits"] = pending
-    origin = idx if signal_anchored else idx_buy
-    for n in range(idx_buy + 1, len(days)):
-        h_day = n - origin
+    for n in range(entry_idx + 1, len(days)):
+        h_day = n - origin_idx
         day = days[n]
         bar = series.get(day)
         reason, bounds = _session(bar, prev, limit)
@@ -198,7 +212,7 @@ def simulate(row, days, idx, series, first_seen, horizons, opts, *, entry_floor=
                 item["target_date"] = day
             if item["status"] in ("closed", "unavailable"):
                 continue
-            if signal_anchored and not bar:
+            if defer_missing and not bar:
                 item.setdefault("path_gaps", []).append(day)
                 if h_day >= horizon:
                     item["attempts"].append({"date": day, "reason": reason})
@@ -218,15 +232,15 @@ def simulate(row, days, idx, series, first_seen, horizons, opts, *, entry_floor=
                 item["attempts"].append({"date": day, "reason": blocked})
                 item.update(status="blocked_exit", reason=blocked)
                 continue
-            item.update(status="closed", reason="", **_settle(out["buy"], day, bar["close"], opts))
+            item.update(status="closed", reason="", **_settle(buy, day, bar["close"], opts))
         if bounds:
             prev = bar
         if all(item["status"] in ("closed", "unavailable") for item in pending.values()):
             break
     for horizon, item in pending.items():
-        if origin + horizon < len(days):
-            item["target_date"] = days[origin + horizon]
-    return out
+        if origin_idx + horizon < len(days):
+            item["target_date"] = days[origin_idx + horizon]
+    return pending
 
 
 def csv_columns(horizons):

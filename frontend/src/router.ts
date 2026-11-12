@@ -48,6 +48,11 @@ const router = createRouter({
       component: () => import("./views/StrategyReviewView.vue"),
       meta: { title: "策略验证" },
     },
+    {
+      path: "/strategy-review/orders",
+      component: () => import("./views/StrategyOrdersView.vue"),
+      meta: { title: "逐笔回放" },
+    },
     { path: "/:pathMatch(.*)*", redirect: "/signals/vol_spike" },
   ],
   scrollBehavior: () => ({ top: 0 }),

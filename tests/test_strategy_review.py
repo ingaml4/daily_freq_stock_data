@@ -103,6 +103,9 @@ def test_review_artifacts_are_authenticated_and_do_not_run_research(tmp_path):
     )
     (folder / "entry-timing").mkdir()
     (folder / "entry-timing" / "report.json").write_text('{"version":"abc-entry-timing-v1"}')
+    minute = folder / "entry-minute" / "2026-11-12"
+    minute.mkdir(parents=True)
+    (minute / "report.json").write_text('{"version":"abc-minute-entry-v1"}')
     server = serve(
         lambda: Store(path), host="127.0.0.1", port=0, password="test", blocking=False
     )
@@ -110,6 +113,10 @@ def test_review_artifacts_are_authenticated_and_do_not_run_research(tmp_path):
     try:
         assert requests.get(base, timeout=5).status_code == 401
         assert requests.get(base + "/entry-timing", timeout=5).status_code == 401
+        assert requests.get(base + "/entry-minute?date=2026-11-12", timeout=5).status_code == 401
+        assert requests.get(base + "/entry-minute?date=../../12", auth=("", "test"), timeout=5).status_code == 400
+        minute_study = requests.get(base + "/entry-minute?date=2026-11-12", auth=("", "test"), timeout=5)
+        assert minute_study.json()["version"] == "abc-minute-entry-v1"
         study = requests.get(base + "/entry-timing", auth=("", "test"), timeout=5)
         assert study.json()["version"] == "abc-entry-timing-v1"
         result = requests.get(base, auth=("", "test"), timeout=5)
@@ -123,6 +130,41 @@ def test_review_artifacts_are_authenticated_and_do_not_run_research(tmp_path):
         )
         with sqlite3.connect(path) as c:
             assert c.execute("SELECT count(*) FROM daily_signals").fetchone()[0] == 0
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_order_urls_negotiate_browser_view_without_changing_json(tmp_path):
+    path = tmp_path / "market.sqlite"
+    with Store(path).init_schema():
+        pass
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html>orders client</html>", encoding="utf8")
+    folder = tmp_path / "strategy-review"
+    (folder / "entry-timing").mkdir(parents=True)
+    (folder / "orders.json").write_bytes(b'{"baseline":[]}')
+    (folder / "entry-timing" / "orders.json").write_bytes(b'[]')
+    server = serve(lambda: Store(path), host="127.0.0.1", port=0, password="test",
+                   blocking=False, frontend_dist=dist)
+    site = f"http://127.0.0.1:{server.server_port}"
+    browser = {"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"}
+    auth = ("", "test")
+    try:
+        for endpoint, dataset, payload in (
+            ("/api/strategy-review/orders", "original", b'{"baseline":[]}'),
+            ("/api/strategy-review/entry-timing/orders", "abc", b'[]'),
+        ):
+            response = requests.get(site + endpoint, headers=browser, allow_redirects=False, timeout=5)
+            assert response.status_code == 303 and response.headers["Vary"] == "Accept"
+            assert response.headers["Location"] == f"/strategy-review/orders?dataset={dataset}"
+            assert requests.get(site + response.headers["Location"], allow_redirects=False, timeout=5).status_code == 303
+            assert requests.get(site + endpoint, timeout=5).status_code == 401
+            assert requests.get(site + endpoint, auth=auth, timeout=5).content == payload
+            assert requests.get(site + endpoint, auth=auth, headers={"Accept": "text/html;q=0,application/json"}, timeout=5).content == payload
+            assert requests.get(site + endpoint + "?format=json", auth=auth, headers=browser, timeout=5).content == payload
+            assert "orders client" in requests.get(site + endpoint, auth=auth, headers=browser, timeout=5).text
     finally:
         server.shutdown()
         server.server_close()

@@ -1978,11 +1978,13 @@ def make_handler(
                 attrs.append("Secure")
             self.send_header("Set-Cookie", "; ".join(attrs))
 
-        def _redirect(self, location: str, cookie: Optional[Tuple[str, int]] = None) -> None:
+        def _redirect(self, location: str, cookie: Optional[Tuple[str, int]] = None, *, vary=None) -> None:
             self.send_response(303)
             self.send_header("Location", location)
             self.send_header("Content-Length", "0")
             self.send_header("Cache-Control", "no-store")
+            if vary:
+                self.send_header("Vary", vary)
             if cookie is not None:
                 self._set_session(cookie[0], cookie[1])
             self.end_headers()
@@ -1998,7 +2000,7 @@ def make_handler(
             raw = parse_qs(body)
             return {key: values[0] for key, values in raw.items() if values}
 
-        def _send(self, body: bytes, status: int = 200, ctype: str = "text/html; charset=utf-8", cache_control: str = "no-store", cookie=None):
+        def _send(self, body: bytes, status: int = 200, ctype: str = "text/html; charset=utf-8", cache_control: str = "no-store", cookie=None, *, vary=None):
             self.send_response(status)
             self.send_header("Content-Type", ctype)
             if len(body) > 1024 and "gzip" in self.headers.get("Accept-Encoding", ""):
@@ -2006,6 +2008,8 @@ def make_handler(
                 self.send_header("Content-Encoding", "gzip")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", cache_control)
+            if vary:
+                self.send_header("Vary", vary)
             if cookie is not None:
                 self._set_session(cookie[0], cookie[1])
             self.end_headers()
@@ -2047,19 +2051,32 @@ def make_handler(
                 self._redirect("/login", cookie=("", 0))
                 return
 
+            order_endpoints = {
+                "/api/strategy-review/orders": "original",
+                "/api/strategy-review/entry-timing/orders": "abc",
+            }
+            order_view = order_endpoints.get(path)
+            if order_view and index and index.is_file() and params.get("format") != "json":
+                from .ui import prefers_orders_page
+
+                if prefers_orders_page(self.headers.get("Accept", "")):
+                    self._redirect(f"/strategy-review/orders?dataset={order_view}", vary="Accept")
+                    return
+
             if not self._authed():
                 if path.startswith("/api/"):
                     self._send(
                         json.dumps({"error": "unauthorized"}, ensure_ascii=False).encode("utf-8"),
                         401,
                         "application/json; charset=utf-8",
+                        vary="Accept" if order_view else None,
                     )
                 else:
                     target = quote(_safe_next(self.path), safe="/?&=%")
                     self._redirect(f"/login?next={target}")
                 return
 
-            is_page = path in ("/", "/index.html", "/summary", "/tiers", "/strategy-review") or path.startswith("/signals/")
+            is_page = path in ("/", "/index.html", "/summary", "/tiers", "/strategy-review", "/strategy-review/orders") or path.startswith("/signals/")
             if index and index.is_file() and is_page:
                 self._send(index.read_bytes())
                 return
@@ -2156,10 +2173,10 @@ def make_handler(
                     if path == "/strategy-review":
                         body = render(json.loads(body)).encode("utf8")
                 except FileNotFoundError:
-                    self._send(b'{"error":"strategy_review_not_generated"}', 404, "application/json")
+                    self._send(b'{"error":"strategy_review_not_generated"}', 404, "application/json", vary="Accept" if order_view else None)
                     return
                 ctype = "text/html; charset=utf-8" if path == "/strategy-review" else "application/json; charset=utf-8"
-                self._send(body, ctype=ctype)
+                self._send(body, ctype=ctype, vary="Accept, Accept-Encoding" if order_view else None)
                 return
 
             if path in ("/api/strategy-review/entry-timing", "/api/strategy-review/entry-timing/orders"):
@@ -2169,7 +2186,26 @@ def make_handler(
                 try:
                     body = target.read_bytes()
                 except FileNotFoundError:
-                    self._send(b'{"error":"entry_timing_study_not_generated"}', 404, "application/json")
+                    self._send(b'{"error":"entry_timing_study_not_generated"}', 404, "application/json", vary="Accept" if order_view else None)
+                    return
+                self._send(body, ctype="application/json; charset=utf-8", vary="Accept, Accept-Encoding" if order_view else None)
+                return
+
+            if path in ("/api/strategy-review/entry-minute", "/api/strategy-review/entry-minute/orders"):
+                day = params.get("date", "")
+                try:
+                    if dt.date.fromisoformat(day).isoformat() != day:
+                        raise ValueError("noncanonical date")
+                except ValueError:
+                    self._send(b'{"error":"expected_signal_date_yyyy_mm_dd"}', 400, "application/json")
+                    return
+                with store_factory() as st:
+                    root = st.path.parent / "strategy-review" / "entry-minute" / day
+                target = root / ("orders.json" if path.endswith("/orders") else "report.json")
+                try:
+                    body = target.read_bytes()
+                except FileNotFoundError:
+                    self._send(b'{"error":"entry_minute_study_not_generated"}', 404, "application/json")
                     return
                 self._send(body, ctype="application/json; charset=utf-8")
                 return

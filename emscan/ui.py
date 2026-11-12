@@ -5,6 +5,27 @@ from pathlib import Path
 from urllib.parse import unquote
 
 
+def prefers_orders_page(accept):
+    """Keep the JSON default for API clients and wildcard Accept headers."""
+    weights = {}
+    for entry in accept.lower().split(","):
+        kind, *params = entry.split(";")
+        kind = kind.strip()
+        if kind not in ("text/html", "application/json"):
+            continue
+        weight = 1.0
+        for param in params:
+            key, _, value = param.partition("=")
+            if key.strip() == "q":
+                try:
+                    weight = float(value)
+                except ValueError:
+                    weight = 0.0
+        if 0 <= weight <= 1:
+            weights[kind] = max(weight, weights.get(kind, 0.0))
+    return weights.get("text/html", 0.0) > weights.get("application/json", 0.0)
+
+
 def asset(dist, url_path):
     if dist is None:
         return None
