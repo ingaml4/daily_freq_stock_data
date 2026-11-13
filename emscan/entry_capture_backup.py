@@ -246,14 +246,16 @@ def run(plan_path, output, db, *, probe=False, clock=now):
         last = {}
         unreadable_lines = 0
         for prior_path in sorted(output.glob("polls-*.jsonl")):
-            with prior_path.open(encoding="utf8") as stream:
-                for line in stream:
-                    try:
-                        row = json.loads(line)
-                    except (ValueError, UnicodeError):
-                        unreadable_lines += 1
-                        continue
-                    last[row["source"]] = row["received_at"]
+            for line in prior_path.read_bytes().splitlines():
+                try:
+                    row = json.loads(line)
+                    if not isinstance(row.get("source"), str) or not isinstance(row.get("received_at"), str):
+                        raise ValueError("invalid prior receipt")
+                    datetime.fromisoformat(row["received_at"])
+                except (ValueError, UnicodeError, AttributeError):
+                    unreadable_lines += 1
+                    continue
+                last[row["source"]] = row["received_at"]
         started = clock()
         path = output / ("polls-" + started.strftime("%H%M%S-%f") + ".jsonl")
         state = dict(state="probing" if probe else "running", trade_date=day, pid=os.getpid(),

@@ -114,11 +114,23 @@ def test_probe_independent_source_failure_and_restart_segments(tmp_path, monkeyp
     assert state["providers"]["tencent"]["transport_success"] is False
     assert state["providers"]["sina"]["usability"] == {"fresh_displayed_ask":1}
     first = (out / state["output_file"]).read_bytes()
+    # A kill during a write may leave a partial UTF-8 tail. Preserve it and resume.
+    first += b"\xff\n"
+    (out / state["output_file"]).write_bytes(first)
     assert capture.run(plan, out, "unused", probe=True, clock=lambda:stamp("09:30:10")) == "probe_complete"
     state2 = json.loads((out / "state.json").read_bytes())
     assert state2["previous_receipts"]["sina"] == stamp().isoformat()
     assert (out / state["output_file"]).read_bytes() == first
     assert state2["output_file"] != state["output_file"]
+    assert state2["prior_unreadable_lines"] == 1
+
+
+def test_boot_outside_planned_date_skips_without_network_or_calendar(tmp_path):
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({"trade_date":"2026-11-16", "symbols":["SZ300629"]}))
+    after = datetime.fromisoformat("2026-11-17T09:10:00+08:00")
+    assert capture.run(plan, tmp_path / "out", "missing.db", clock=lambda:after) == "different_trade_date"
+    assert not (tmp_path / "out").exists()
 
 
 def test_minute_end_label_does_not_turn_opening_tick_or_forming_bar_into_closed_minute():
