@@ -135,3 +135,20 @@ def test_fixed_amount_override_does_not_fill_missing_evidence():
         assert book["sized_count"] == 0
         assert book["mature_net_return"] is None
         assert not book["entry_data_complete"]
+
+
+def test_report_digest_hashes_actual_bytes_with_windows_newlines(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    from emscan import position_report
+
+    def windows_write(path, text):
+        path.write_bytes(text.replace("\n", "\r\n").encode("utf-8"))
+
+    monkeypatch.setattr(position_report, "_atomic_write", windows_write)
+    path = tmp_path / "report.json"
+    result = {"fixed_amount": 24000, "name": "研究"}
+    digest = position_report.write_report(path, result)
+    assert b"\r\n" in path.read_bytes()
+    assert digest == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert json.loads(path.read_bytes()) == result

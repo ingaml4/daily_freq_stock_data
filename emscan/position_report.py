@@ -228,6 +228,14 @@ def build_parser():
     return parser
 
 
+def write_report(path, result):
+    encoded = json.dumps(result, ensure_ascii=False, allow_nan=False, indent=2) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write(path, encoded)
+    # Text-mode atomic writes may use CRLF on Windows. Hash the delivered bytes.
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def main():
     parser = build_parser()
     args = parser.parse_args()
@@ -257,10 +265,8 @@ def main():
                          policy=Policy(fixed_amount=args.fixed_amount))
     result.update(archive_sha256=args.archive_sha256, capture_config_sha256=config_sha,
                   events_sha256=hashlib.sha256(raw).hexdigest(), archive=archive_info)
-    encoded = json.dumps(result, ensure_ascii=False, allow_nan=False, indent=2) + "\n"
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write(args.out, encoded)
-    print(json.dumps({"out": str(args.out), "sha256": hashlib.sha256(encoded.encode()).hexdigest(),
+    digest = write_report(args.out, result)
+    print(json.dumps({"out": str(args.out), "sha256": digest,
                       "candidate_count": result["candidate_count"]}))
 
 
