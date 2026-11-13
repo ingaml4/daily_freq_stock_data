@@ -34,3 +34,31 @@ python -m emscan.entry_minute_report \
 `--capture-config` 为可选的原始采集配置。提供时核对配置中的机会归档摘要、D+1 日期、候选键、触发位和风险位，并从冻结的 `boards` 读取板块分母和版本。C 类可记录当时可见的申万二级观察组，A/B 使用正式归档的主线依据。
 
 已登录站点可读 `/api/strategy-review/entry-minute?date=2026-11-12` 和 `/api/strategy-review/entry-minute/orders?date=2026-11-12`，参数是 D 日。HTTP 请求只读取生成的文件。原始采集文件和导入工作目录可放在私有目录。
+
+## 2026-11-16 起的采样覆盖 v2
+
+只有新冻结配置显式包含 `sampling_coverage_version: 2` 时启用。原信号与 O/R 时点条件沿用，旧配置默认 v1，11 月 13 日原始证据不改写。v1 与 v2 的覆盖记录不能默默混用。
+
+v2 将采样是否执行和报价是否可用分别记录。`coverage` 的 `complete` 表示计划采样请求执行成功、该证券响应完整且没有调度空档。必须另外写 `sampling_coverage_version: 2`、`transport_ok`、`symbol_parsed`、`quote_usable`、`current_fresh`，均为明确布尔值。`complete=true` 至少要求 `transport_ok=true` 与 `symbol_parsed=true`。超时、缺证券、解析失败、观察者中断、调度超时仍是不完整区间。
+
+成功收到 09:29 的报价能证明该次采样已执行，但其 `quote_usable=false`，绝不成为 09:30 卖一。报价本身仍按原源时点、收到时点、15 秒新鲜度、数量、价格制度及确认后时序过滤。完整采样不能证明观察到了交易所每一笔报价，成交仍只是显示盘口代理。
+
+v2 按独立来源逐段判断覆盖。一个源失败只否定该源，另一个源确实采到的区间可以补足。两个源都缺失的区间仍会阻断验证。同一源互相冲突的完整/缺失声明，以缺失为准，不允许后续完整声明抹除故障。各源和各观察位置需要独立 source ID。
+
+## 服务器独立备份
+
+`emscan.entry_capture_backup` 用独立、限时的 HTTP 子进程保存公开盘口。盘口与分钟工人相互独立，单个源超时不阻塞其他源。仅用只读交易日历，按冻结标的计划运行。每次重启写新的 `polls-*.jsonl`，原始响应、请求时刻、接收时刻、源时刻、失败和恢复间隔都留存。计划首次启动后保存为 `frozen-plan.json`，重启时不允许偷偷替换。
+
+下一交易日服务器计划放在 `/home/admin/.local/share/emscan/entry-capture/2026-11-16-plan.json`，证据在同级 `2026-11-16/`。`cohorts.recheck` 是原 11 只采集复测，`cohorts.formal` 是前一交易日正式收盘归档的 D+1 研究，顶层 `symbols` 为两者并集。正式归档生成后、服务器首次启动前，由冻结流程原子加入正式队列。未生成归档不能填造正式名单。复测队列不当作新的正式 D+1 信号。
+
+服务器腾讯盘口与分钟连接已实测。新浪在本机可用，服务器出口实测 HTTP 403，因此生产服务器计划禁用新浪，保留本机新浪作为独立来源，不绕过访问限制。服务按 `deploy/emscan-entry-capture-backup.timer` 在 11 月 16 日 09:12 启动，失败 3 秒后重启，并可在同日系统重启后恢复。NTP 与采样心跳均应在盘前检查。独立证据不依赖本机进程过夜存活。
+
+```sh
+python -m emscan.entry_backup_export \
+  --input /home/admin/.local/share/emscan/entry-capture/2026-11-16 \
+  --date 2026-11-16 \
+  --quote-out /private/backup-quotes.jsonl \
+  --minute-out /private/backup-minutes.jsonl
+```
+
+导出清单记录全部输入与输出字节 SHA256。盘口源为 `tencent/server` 或 `sina/server`。备用分钟源为 `tencent-minute/server`，以完整分钟结束标签减一分钟映射到原开始标签，09:30 撮合点不算完整分钟，未完成和超过及时到达期限的分钟不导出为有效证据。该源没有分钟最低价，必须保留 `low=null` 与仅收盘价的风险路径限制。实测不同供应商的部分沪市分钟价格不一致，因此备用分钟单列，不无痕拼接到雪球分钟序列。

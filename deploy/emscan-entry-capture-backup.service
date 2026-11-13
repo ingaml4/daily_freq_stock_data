@@ -1,0 +1,22 @@
+[Unit]
+Description=Independent public quote and minute evidence capture
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=admin
+WorkingDirectory=/home/admin/daily_freq_stock_data
+Environment=TZ=Asia/Shanghai
+UMask=0077
+NoNewPrivileges=yes
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=8
+KillMode=control-group
+ExecStart=/bin/python3 -m emscan.entry_capture_backup --plan /home/admin/.local/share/emscan/entry-capture/2026-11-16-plan.json --output /home/admin/.local/share/emscan/entry-capture/2026-11-16 --calendar-db /home/admin/daily_freq_stock_data/data/market.sqlite
+
+[Install]
+WantedBy=multi-user.target
+

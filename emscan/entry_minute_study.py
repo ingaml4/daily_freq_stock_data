@@ -58,7 +58,7 @@ def read_events(lines):
     return result
 
 
-def _event(row, day, received, windows, ref, bounds):
+def _event(row, day, received, windows, ref, bounds, coverage_version=1):
     source, kind = row.get("source"), row.get("type")
     if type(row.get("schema_version")) is not int or row["schema_version"] != 1:
         raise ValueError("unsupported_schema")
@@ -109,6 +109,17 @@ def _event(row, day, received, windows, ref, bounds):
         ):
             raise ValueError("invalid_coverage_interval")
         reason = row.get("reason")
+        version = row.get("sampling_coverage_version", 1)
+        if scope == "quote":
+            if type(version) is not int or version not in (1, 2) or version != coverage_version:
+                raise ValueError("coverage_version_conflicts_with_frozen_configuration")
+            if version == 2:
+                fields = ("transport_ok", "symbol_parsed", "quote_usable", "current_fresh")
+                if any(type(row.get(key)) is not bool for key in fields):
+                    raise ValueError("missing_v2_sampling_diagnostics")
+                if complete and not (row["transport_ok"] and row["symbol_parsed"]):
+                    raise ValueError("complete_sampling_without_successful_symbol_response")
+                event.update(sampling_coverage_version=2, **{key: row[key] for key in fields})
         return dict(event, start=start, end=end, scope=scope, complete=complete,
                     reason=reason if isinstance(reason, str) else None)
     source_at = _stamp(row.get("source_at"))
@@ -153,7 +164,8 @@ def _event(row, day, received, windows, ref, bounds):
     raise ValueError("unknown_evidence_type")
 
 
-def _tape(events, day, symbol, sector_membership, mainline_keys, as_of, windows, ref, bounds):
+def _tape(events, day, symbol, sector_membership, mainline_keys, as_of, windows, ref, bounds,
+          coverage_version=1):
     accepted, rejected = defaultdict(list), Counter()
     for row in events:
         if row.get("trade_date") != day.isoformat():
@@ -169,7 +181,7 @@ def _tape(events, day, symbol, sector_membership, mainline_keys, as_of, windows,
                 continue
             if received.date() != day:
                 raise ValueError("receipt_outside_trade_date")
-            event = _event(row, day, received, windows, ref, bounds)
+            event = _event(row, day, received, windows, ref, bounds, coverage_version)
             if event["type"] == "sector":
                 key = event["key"]
                 membership = sector_membership.get(key)
@@ -206,9 +218,32 @@ def _first_minutes(rows):
     return first
 
 
-def _covered(rows, source, start, end):
+def _covered(rows, source, start, end, version=1):
     if start == end:
         return True  # A quote at the start of the window has no earlier interval to verify.
+    if version == 2:
+        changes = defaultdict(list)
+        for row in rows:
+            if row["scope"] != "quote" or row.get("sampling_coverage_version") != 2:
+                continue
+            left, right = max(start, row["start"]), min(end, row["end"])
+            if left < right:
+                key = (row["source"], row["complete"])
+                changes[left].append((key, 1))
+                changes[right].append((key, -1))
+        changes[start]
+        changes[end]
+        active = Counter()
+        points = sorted(changes)
+        for i, point in enumerate(points[:-1]):
+            for key, delta in changes[point]:
+                active[key] += delta
+            if points[i + 1] > point and not any(
+                count > 0 and good and active[(provider, False)] == 0
+                for (provider, good), count in active.items()
+            ):
+                return False
+        return True
     spans = [
         row for row in rows
         if row["scope"] == "quote" and row["source"] == source
@@ -276,7 +311,7 @@ def _opening(order, rows, coverage, start, as_of, risk, bounds, minimum, opts):
     tied = [item for item in quotes if item["received_at"] == row["received_at"]]
     if len({(item["ask_price"], item["ask_shares"]) for item in tied}) > 1:
         return _finish(order, "data_gap", "conflicting_opening_book_quotes")
-    if not _covered(coverage, row["source"], start, row["received_at"]):
+    if not _covered(coverage, row["source"], start, row["received_at"], opts.get("sampling_coverage_version", 1)):
         return _finish(order, "data_gap", "opening_book_coverage_unverified")
     price = row["ask_price"]
     blocked, qty = _blocked(price, row["ask_shares"], bounds, minimum, opts)
@@ -360,9 +395,9 @@ def _path(minutes, labels, pair, seen, trigger, opening_price):
     return {"type": path, "basis": "minute_close_and_available_low" if used_low else "minute_close"}
 
 
-def _quote_prefix(coverage, source, seen, end, windows):
+def _quote_prefix(coverage, source, seen, end, windows, version=1):
     return all(
-        _covered(coverage, source, max(start, seen), min(stop, end))
+        _covered(coverage, source, max(start, seen), min(stop, end), version)
         for start, stop in windows if start <= end and seen < stop
     )
 
@@ -418,7 +453,8 @@ def _confirmed(order, minutes, labels, tape, windows, as_of, opening_price, trig
         if missing:
             order["missing_minute_labels"] = missing
             return _finish(order, "data_gap", "incomplete_minutes_while_waiting_for_quote")
-        if not _quote_prefix(tape["coverage"], row["source"], seen, at, windows):
+        if not _quote_prefix(tape["coverage"], row["source"], seen, at, windows,
+                             opts.get("sampling_coverage_version", 1)):
             return _finish(order, "data_gap", "confirmation_book_coverage_unverified")
         blocked, qty = _blocked(price, row["ask_shares"], bounds, minimum, opts)
         if blocked == "price_outside_ordinary_limits":
@@ -439,7 +475,8 @@ def _confirmed(order, minutes, labels, tape, windows, as_of, opening_price, trig
         order["missing_minute_labels"] = missing
         return _finish(order, "data_gap", "incomplete_minutes_while_waiting_for_quote")
     covered = any(
-        _quote_prefix(tape["coverage"], source, seen, end, windows)
+        _quote_prefix(tape["coverage"], source, seen, end, windows,
+                      opts.get("sampling_coverage_version", 1))
         for source in {row["source"] for row in tape["coverage"] if row["scope"] == "quote"}
     )
     if breach:
@@ -556,9 +593,12 @@ def replay_candidate(candidate, events, days, series, *, as_of, opts=None, quant
     limit, minimum = rules
     bounds = execution._limit_bounds(ref, limit)
     sector_membership = candidate.get("sector_membership", {})
+    coverage_version = candidate.get("sampling_coverage_version", 1)
+    if type(coverage_version) is not int or coverage_version not in (1, 2):
+        return end_all("data_gap", "unsupported_sampling_coverage_version")
     mainline_keys = {line["key"] for line in candidate.get("mainlines", [])}
     tape, rejected = _tape(events, entry_day, symbol, sector_membership, mainline_keys,
-                           as_of, windows, ref, bounds)
+                           as_of, windows, ref, bounds, coverage_version)
     minutes = _first_minutes(tape["minute"])
     result["coverage"] = {
         "expected_minute_labels": len(labels), "visible_minute_labels": len(minutes),
@@ -571,6 +611,7 @@ def replay_candidate(candidate, events, days, series, *, as_of, opts=None, quant
     # An explicit research-only probe locates a one-lot opportunity before sizing.
     # The regular O/R report retains its original fixed-budget eligibility.
     options["quantity_probe"] = quantity_probe
+    options["sampling_coverage_version"] = coverage_version
     if quantity_probe:
         result["quantity_basis"] = "one_lot_probe_for_separate_sizing_research"
     start = windows[0][0]

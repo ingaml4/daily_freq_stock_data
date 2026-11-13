@@ -44,12 +44,16 @@ def read_candidates(path, expected_sha256):
 def attach_capture_config(path, day, archive_sha, candidates):
     raw = path.read_bytes()
     config = json.loads(raw)
+    coverage_version = config.get("sampling_coverage_version", 1)
+    if type(coverage_version) is not int or coverage_version not in (1, 2):
+        raise ValueError("unsupported sampling coverage version")
     if config.get("source_sha256") != archive_sha or config.get("source_date") != day:
         raise ValueError("采集配置引用的机会归档不一致")
     rows = {(row["ticker"], row["group"]): row for row in config["candidates"]}
     if len(rows) != len(config["candidates"]) or set(rows) != {(r["symbol"], r["mode"]) for r in candidates}:
         raise ValueError("采集配置的候选键不完整或重复")
     for candidate in candidates:
+        candidate["sampling_coverage_version"] = coverage_version
         row = rows[candidate["symbol"], candidate["mode"]]
         if (row["trigger"], row["risk"]) != (candidate["trigger"], candidate["risk"]):
             raise ValueError("采集配置的触发或风险位与正式归档不一致")
@@ -98,6 +102,7 @@ def replay_archive(conn, day, candidates, events, as_of, *, configured_entry_day
         "version": entry_minute_study.VERSION, "signal_date": day, "entry_date": entry_day,
         "target_date": target, "as_of": cutoff.isoformat(), "candidate_count": len(records),
         "planned_exit_reached": mature,
+        "sampling_coverage_version": candidates[0].get("sampling_coverage_version", 1) if candidates else 1,
         "outcomes": entry_minute_study.summarize(records),
         "by_mode": {mode: entry_minute_study.summarize([r for r in records if r["mode"] == mode]) for mode in MODES},
         "cash_mature": _cash(records, prices, [d for d in days if d <= complete_through.isoformat()], day,
