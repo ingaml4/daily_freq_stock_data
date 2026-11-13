@@ -2,7 +2,8 @@ from copy import deepcopy
 from datetime import datetime
 
 from emscan.entry_minute_study import replay_candidate
-from emscan.position_report import compare
+from emscan.position_report import compare, build_parser
+from emscan.position_sizing import Policy
 from test_entry_minute_study import (CANDIDATE, DAYS, D1, D5, auction, prices,
                                     opening_events, confirmation_events, quote_events, stamp)
 
@@ -99,3 +100,38 @@ def test_data_gap_preserved_in_denominator():
     assert not book["entry_data_complete"]
     assert not book["outcomes_mature"]
     assert book["mature_net_return"] is None
+
+
+def test_fixed_amount_cli_default_and_explicit_override():
+    required = ["--db", "db", "--archive", "archive", "--capture-config", "config",
+                "--events", "events", "--out", "out", "--archive-sha256", "hash",
+                "--as-of", stamp("15:30:00", D5)]
+    assert build_parser().parse_args(required).fixed_amount == 48000
+    assert build_parser().parse_args(required + ["--fixed-amount", "24000"]).fixed_amount == 24000
+    row = sample()
+    original = compare([row], {CANDIDATE["secid"]: prices()}, DAYS, stamp("15:30:00", D5))
+    changed = compare([row], {CANDIDATE["secid"]: prices()}, DAYS, stamp("15:30:00", D5),
+                      policy=Policy(fixed_amount=24000))
+    assert original["fixed_amount"] == original["policy"]["fixed_amount"] == 48000
+    assert changed["fixed_amount"] == changed["policy"]["fixed_amount"] == 24000
+    assert changed["fixed_amount_basis"] == "per_order_cash_budget_including_buy_costs"
+    assert changed["cohort_basis"] == "archived_ABC_cohort_not_named_candidate_prospective_trial"
+    for arm in ("O", "R"):
+        old = original["arms"][arm]["fixed"]["ledger"][0]["order"]
+        new = changed["arms"][arm]["fixed"]["ledger"][0]["order"]
+        assert new["buy"]["cash"] <= 24000 < old["buy"]["cash"] <= 48000
+        assert new["buy"]["at"] == old["buy"]["at"]
+        for mode in ("all_in", "risk", "risk_first"):
+            assert original["arms"][arm][mode]["ledger"][0]["order"] == changed["arms"][arm][mode]["ledger"][0]["order"]
+
+
+def test_fixed_amount_override_does_not_fill_missing_evidence():
+    row = sample(events=[])
+    report = compare([row], {CANDIDATE["secid"]: prices()}, DAYS, stamp("15:30:00", D5),
+                     policy=Policy(fixed_amount=24000))
+    for arm in ("O", "R"):
+        book = report["arms"][arm]["fixed"]
+        assert book["candidate_count"] == 1
+        assert book["sized_count"] == 0
+        assert book["mature_net_return"] is None
+        assert not book["entry_data_complete"]

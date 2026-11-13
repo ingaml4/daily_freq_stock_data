@@ -65,6 +65,9 @@ def compare(records, prices, days, as_of, *, capital=240000.0, policy=None):
         "candidate_count": len(records), "unique_securities": len(rows),
         "overlapping_modes_removed": len(records) - len(rows),
         "policy": asdict(policy), "costs": opts,
+        "fixed_amount": policy.fixed_amount,
+        "fixed_amount_basis": "per_order_cash_budget_including_buy_costs",
+        "cohort_basis": "archived_ABC_cohort_not_named_candidate_prospective_trial",
         "allocation_basis": "starting_capital_and_entry_cost_exposures_single_cohort",
         "entry_basis": "same_first_one_lot_qualified_quote_per_O_R_arm",
         "theme_basis": "frozen_mainlines_else_frozen_SW2_industry_proxy",
@@ -213,13 +216,20 @@ def _metrics(ledger, prices, days, signal_day, as_of, capital, exposure):
     }
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     for key in ("db", "archive", "capture-config", "events", "out"):
         parser.add_argument("--" + key, required=True, type=Path)
     parser.add_argument("--archive-sha256", required=True)
     parser.add_argument("--as-of", required=True, type=datetime.fromisoformat)
     parser.add_argument("--capital", type=float, default=240000)
+    parser.add_argument("--fixed-amount", type=float, default=Policy().fixed_amount,
+                        help="fixed arm per-order cash budget, including buy costs (default: 48000)")
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
     if args.as_of.utcoffset() is None or args.as_of > datetime.now(SHANGHAI):
         parser.error("as-of must have a timezone and must not be in the future")
@@ -243,7 +253,8 @@ def main():
             for bar in conn.execute("SELECT * FROM bars WHERE secid=? AND date>=? AND date<=?", (sid, day, end.isoformat())):
                 prices[sid][bar["date"]] = dict(bar)
             records.append(minute.replay_candidate(candidate, events, days, prices[sid], as_of=args.as_of, quantity_probe=True))
-        result = compare(records, prices, days, args.as_of, capital=args.capital)
+        result = compare(records, prices, days, args.as_of, capital=args.capital,
+                         policy=Policy(fixed_amount=args.fixed_amount))
     result.update(archive_sha256=args.archive_sha256, capture_config_sha256=config_sha,
                   events_sha256=hashlib.sha256(raw).hexdigest(), archive=archive_info)
     encoded = json.dumps(result, ensure_ascii=False, allow_nan=False, indent=2) + "\n"
