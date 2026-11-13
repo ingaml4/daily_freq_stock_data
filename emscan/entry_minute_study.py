@@ -256,7 +256,7 @@ def _blocked(price, shares, bounds, minimum, opts):
         return "price_outside_ordinary_limits", 0
     if price >= bounds[1]:
         return "upper_limit_queue_unconfirmed", 0
-    qty = execution._shares(price, minimum, opts)
+    qty = minimum if opts.get("quantity_probe") else execution._shares(price, minimum, opts)
     if not qty:
         return "insufficient_cash_for_minimum_lot", 0
     if shares < qty:
@@ -490,7 +490,7 @@ def _sector_at(rows, at):
     return list(latest.values())
 
 
-def replay_candidate(candidate, events, days, series, *, as_of, opts=None):
+def replay_candidate(candidate, events, days, series, *, as_of, opts=None, quantity_probe=False):
     """Replay a single frozen candidate against its D+1 observations and completed daily exits."""
     as_of = _stamp(as_of)
     day, secid, symbol, mode = (candidate[key] for key in ("date", "secid", "symbol", "mode"))
@@ -568,6 +568,11 @@ def replay_candidate(candidate, events, days, series, *, as_of, opts=None):
     }
     result["sector"] = _sector_at(tape["sector"], as_of)
     options = strategy_execution._settings(None, opts)
+    # An explicit research-only probe locates a one-lot opportunity before sizing.
+    # The regular O/R report retains its original fixed-budget eligibility.
+    options["quantity_probe"] = quantity_probe
+    if quantity_probe:
+        result["quantity_basis"] = "one_lot_probe_for_separate_sizing_research"
     start = windows[0][0]
     _auction(auction, tape["opening"], start, as_of, risk, bounds, minimum, options)
     if auction["reason"] == "auction_at_or_below_risk":
